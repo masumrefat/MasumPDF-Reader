@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/icons/app_256.png" width="120" alt="MasumPDF Reader logo">
+  <img src="resources/icons/logo.png" width="120" alt="MasumPDF Reader logo">
 </p>
 
 <h1 align="center">MasumPDF Reader</h1>

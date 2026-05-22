@@ -31,9 +31,7 @@ That's it. The installer puts a **MasumPDF Reader** icon on your Desktop.
 > finish. It only happens once; after that the app opens instantly. You need
 > an internet connection during the install.
 
-> If Windows shows a blue "Windows protected your PC" box (because the app is
-> new and not signed), click **More info → Run anyway**. This is normal for
-> small open-source apps.
+
 
 ## About
 

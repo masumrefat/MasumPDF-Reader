@@ -32,7 +32,7 @@ under the MIT License. It is intended for education purposes.
 - **Read & view** — continuous, single, and two-page modes; zoom, rotate, fit, fullscreen; dark and light themes
 - **Search** the full document
 - **Annotate** — highlight, sticky notes, comments, stamps
-- **Edit** — add text, insert images, change text color, edit a line, headers & footers
+- **Edit** — Edit Mode (click any line and type), add text, insert images, color a line, change text color, headers & footers
 - **Undo & erase** — undo any edit (Ctrl+Z) or click to delete a single annotation
 - **Organize pages** — merge, split, extract, rotate, insert, delete
 - **Sign & forms** — place signatures, prepare and fill form fields
@@ -44,6 +44,7 @@ under the MIT License. It is intended for education purposes.
 - **Compress, encrypt/decrypt, edit metadata**
 - **Print** with a custom print dialog (page range, copies, grayscale, live preview)
 - **Clickable links** — table-of-contents and web links work inside the page
+- **Check for updates** — the app can check this GitHub page for new versions
 
 ## Install (Windows)
 
@@ -57,6 +58,17 @@ It does everything automatically:
 
 Then open the app from the Desktop icon.
 
+> ⏱️ **Please be patient — the first setup takes about 15–20 minutes**
+> (depending on your internet speed). It downloads around **800 MB** of
+> components (Python libraries like PySide6 and PyMuPDF) the first time.
+> This is normal. Leave the window open and let it finish — it only happens
+> once. After that, the app opens instantly. You need an internet connection
+> during this first setup.
+
+> 💡 Tip: put the folder in a **short path** like `C:\pdf` before running
+> `SETUP.bat` (not deep inside Downloads), so Windows doesn't hit its
+> long-path limit.
+
 > To make all PDF files open in this app and show its logo, go to
 > **Settings → Apps → Default apps**, search **MasumPDF Reader**, and set it
 > for `.pdf` (then restart once).
@@ -64,6 +76,13 @@ Then open the app from the Desktop icon.
 See `HOW_TO_INSTALL.txt` for the simple version.
 
 ## Install (macOS / Linux)
+
+On a Mac, the easy way is to **double-click `SETUP_MAC.command`** — it sets up
+everything, then creates a `RUN_MAC.command` you double-click to open the app.
+(The first time, macOS may ask you to allow it: right-click → **Open** →
+**Open**. That's normal for downloaded scripts.)
+
+Or by hand in Terminal (Mac or Linux):
 
 ```bash
 python3 -m venv .venv
@@ -74,6 +93,9 @@ python main.py
 
 OCR also needs the Tesseract program installed on your system
 (`tesseract-ocr` on Linux, or from the Tesseract project on macOS).
+
+> ⏱️ Just like on Windows, the **first setup takes about 15–20 minutes** and
+> downloads around **800 MB** of components. This only happens once.
 
 ## Built with
 
@@ -86,7 +108,10 @@ OCR also needs the Tesseract program installed on your system
 
 ```
 masumpdf_reader/
-├── SETUP.bat            # one-click installer (Windows)
+├── SETUP.bat            # quick run-from-folder setup (Windows)
+├── INSTALL.bat          # proper installer (copies to Program Files)
+├── UNINSTALL.bat        # removes the app cleanly
+├── SETUP_MAC.command    # setup for macOS
 ├── HOW_TO_INSTALL.txt   # simple instructions
 ├── main.py              # app entry point + splash screen
 ├── requirements.txt     # Python packages
@@ -101,6 +126,12 @@ masumpdf_reader/
 
 - This is a student / education project, not a commercial product. It does its
   job well, but it is smaller in scope than paid tools and may have rough edges.
+- **First setup is slow** (about 15–20 minutes, ~800 MB download) because it
+  fetches all the components. This is one-time only.
+- **Editing existing text** keeps the original font for standard fonts
+  (Times, Helvetica, etc.). For unusual embedded fonts, it uses the closest
+  matching font, so it may not be pixel-identical — the same limit other PDF
+  editors have.
 - The PDF comparison is **text-and-figure based**. It catches text changes
   precisely and flags changed figures, but it is not pixel-perfect on every
   scanned or image-only document.

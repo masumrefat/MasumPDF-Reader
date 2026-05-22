@@ -76,19 +76,6 @@ Open **Windows Settings → Apps**, find **MasumPDF Reader**, and click
 - [Pillow](https://python-pillow.org/), [NumPy](https://numpy.org/) — image handling and comparison
 - [pypdf](https://pypdf.readthedocs.io/), [reportlab](https://www.reportlab.com/) — PDF utilities
 
-## For developers (running from source)
-
-If you want to run or study the code instead of using the installer:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # on Windows
-pip install -r requirements.txt
-python main.py
-```
-
-(The first `pip install` downloads ~800 MB and takes 15–20 minutes.)
-
 ## Honest notes
 
 - This is a student / education project, not a commercial product. It does its

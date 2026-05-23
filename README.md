@@ -67,6 +67,8 @@ under the MIT License. It is intended for education purposes.
 Open **Windows Settings → Apps**, find **MasumPDF Reader**, and click
 **Uninstall**. (Python is left in place since other programs may use it.)
 
+If Windows shows a blue "Windows protected your PC" box (because the app is new and not signed), click More info → Run anyway. This is normal for small open-source apps.
+
 ## Built with
 
 - [PySide6](https://doc.qt.io/qtforpython/) — the Qt GUI framework

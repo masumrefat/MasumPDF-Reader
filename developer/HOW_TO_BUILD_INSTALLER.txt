@@ -1,0 +1,64 @@
+============================================================
+  HOW TO BUILD THE PROFESSIONAL INSTALLER (Setup.exe)
+  MasumPDF Reader  -  by Chowdhury Mohammad Masum Refat
+============================================================
+
+This makes ONE file:  MasumPDF-Reader-Setup.exe
+A real Windows installer wizard (Welcome, License, Choose Folder,
+progress, Finish) - like professional software.
+
+Do this on a WINDOWS PC, one time per version.
+
+------------------------------------------------------------
+WHAT YOU NEED (both free)
+------------------------------------------------------------
+1. Inno Setup  ->  https://jrsoftware.org/isdl.php
+2. Python installer  ->  https://www.python.org/downloads/
+   Download:  python-3.12.4-amd64.exe
+
+------------------------------------------------------------
+STEPS
+------------------------------------------------------------
+1. Put the whole masumpdf_reader folder on your Windows PC,
+   in a SHORT path like  C:\masumpdf_reader
+   (not deep inside Downloads with repeated folders).
+
+2. Put the Python installer file  python-3.12.4-amd64.exe  in the
+   MAIN masumpdf_reader folder (the one with main.py and LICENSE) -
+   NOT inside the developer folder.
+
+   If your Python file has a different version number, rename it to
+   python-3.12.4-amd64.exe  (or edit the two lines mentioning that
+   name inside developer\installer.iss).
+
+3. Open  developer\installer.iss  (double-click - opens in Inno Setup).
+
+4. Click  Build > Compile   (or press F9).
+
+5. When done, the installer is created here:
+       developer\Output\MasumPDF-Reader-Setup.exe
+
+6. Share THAT Setup.exe (via GitHub Releases or Google Drive).
+
+------------------------------------------------------------
+IMPORTANT - the file paths
+------------------------------------------------------------
+The installer.iss is inside the "developer" folder, but it is set
+up to read the app files from the MAIN folder one level up
+(using "SourceDir=.."). So:
+   - keep installer.iss inside  developer\
+   - keep LICENSE, main.py, resources\, etc. in the MAIN folder
+   - put python-3.12.4-amd64.exe in the MAIN folder
+This is already configured - just follow step 2 above.
+
+------------------------------------------------------------
+PUTTING IT ON GITHUB (file is ~35 MB)
+------------------------------------------------------------
+GitHub normal upload limit is 25 MB, BUT GitHub RELEASES allow up
+to 2 GB. So upload the Setup.exe as a RELEASE attachment:
+   1. Repo > Releases > Create a new release
+   2. Tag: v4.16.0   (match the app version)
+   3. Drag Setup.exe into "Attach binaries" - WAIT for upload to finish
+   4. Publish release
+Your app's auto-update reads from Releases, so this connects together.
+============================================================

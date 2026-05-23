@@ -1,7 +1,7 @@
 """Constants used across the MasumPDF Reader app."""
 
 APP_NAME = "MasumPDF Reader"
-APP_VERSION = "4.16.1"
+APP_VERSION = "1.0.1"
 # GitHub repo used to check for newer versions (owner/repo).
 # Change this if your repository name is different.
 GITHUB_REPO = "masumrefat/MasumPDF-Reader"
@@ -9,6 +9,7 @@ APP_ORG = "MasumPDF"
 APP_AUTHOR = "Chowdhury Mohammad Masum Refat"
 APP_LICENSE = "MIT License"
 APP_PURPOSE = "For education purpose only"
+APP_TAGLINE = "One for all PDF reader for researchers"
 
 # Zoom
 DEFAULT_ZOOM = 1.0
@@ -26,7 +27,7 @@ THUMBNAIL_DPI = 50
 # PDF native 72 DPI) gives crisp text on any normal monitor. We also
 # multiply by the screen's device-pixel-ratio at render time, so a hi-DPI
 # (Retina / 4K / scaled-Windows) display ends up around 400 DPI internally.
-RENDER_DPI = 200
+RENDER_DPI = 150
 
 # Quality presets the user can pick in Settings.
 # Higher = sharper but slower and more memory per cached page.
@@ -68,10 +69,36 @@ OCR_LANGUAGES = {
     "German": "deu",
     "Italian": "ita",
     "Portuguese": "por",
+    "Dutch": "nld",
+    "Polish": "pol",
+    "Czech": "ces",
+    "Romanian": "ron",
+    "Hungarian": "hun",
+    "Greek": "ell",
+    "Turkish": "tur",
+    "Swedish": "swe",
+    "Norwegian": "nor",
+    "Danish": "dan",
+    "Finnish": "fin",
+    "Russian": "rus",
+    "Ukrainian": "ukr",
+    "Bulgarian": "bul",
+    "Serbian": "srp",
     "Japanese": "jpn",
     "Chinese (Simplified)": "chi_sim",
     "Chinese (Traditional)": "chi_tra",
     "Korean": "kor",
-    "Russian": "rus",
+    "Vietnamese": "vie",
+    "Thai": "tha",
     "Arabic": "ara",
+    "Persian": "fas",
+    "Hebrew": "heb",
+    "Hindi": "hin",
+    "Bengali": "ben",
+    "Tamil": "tam",
+    "Telugu": "tel",
+    "Urdu": "urd",
+    "Indonesian": "ind",
+    "Malay": "msa",
+    "Multiple — English + most common": "eng+spa+fra+deu+chi_sim+jpn+ara+rus",
 }

@@ -109,6 +109,13 @@ class AppSettings:
     def set_ocr_language(self, lang: str):
         self.set("ocr_language", lang)
 
+    # ----- interface (GUI) language -----
+    def ui_language(self) -> str:
+        return self.get("ui_language", "en")
+
+    def set_ui_language(self, code: str):
+        self.set("ui_language", code)
+
     # ----- annotation defaults -----
     def highlight_color(self) -> str:
         return self.get("annotation_highlight_color", DEFAULT_HIGHLIGHT_COLOR)

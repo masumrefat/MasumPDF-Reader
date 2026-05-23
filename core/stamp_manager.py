@@ -88,9 +88,13 @@ class StampManager:
         # text
         fontsize = min(height * 0.55, width / max(4, len(text)) * 1.4)
         fontsize = max(10, min(48, fontsize))
-        # tight rect so the text is centered
-        page.insert_textbox(rect, text.upper(),
-                            fontname="hebo",   # Helvetica Bold
+        # tight rect so the text is centered. Use a Unicode font when the
+        # stamp text isn't plain Latin, so Bangla/CJK/etc. don't become "????".
+        from utils.fonts import font_for_page
+        stamp_text = text.upper()
+        fn, ff = font_for_page(page, stamp_text, "hebo")
+        page.insert_textbox(rect, stamp_text,
+                            fontname=fn, fontfile=ff,
                             fontsize=fontsize,
                             color=rgb,
                             align=1,           # center

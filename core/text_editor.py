@@ -102,27 +102,13 @@ def change_text_color_on_page(input_path: str,
     # 2) re-draw each span in the new color
     changed = 0
     skipped = 0
+    from utils.fonts import draw_text
     for s in spans:
         font_name = _builtin_font_for(s["font"])
-        bbox = s["bbox"]
-        # Use insert_textbox so long spans stay inside their box.
-        # Anchor at top-left; PyMuPDF baseline is top-down in this API.
+        bbox = fitz.Rect(s["bbox"])
         try:
-            res = page.insert_textbox(
-                bbox,
-                s["text"],
-                fontname=font_name,
-                fontsize=s["size"],
-                color=color,
-                align=0,         # left
-                render_mode=0,   # fill
-            )
-            if res < 0:
-                # text did not fit — try smaller size
-                page.insert_textbox(bbox, s["text"],
-                                    fontname=font_name,
-                                    fontsize=max(4, s["size"] - 1),
-                                    color=color, align=0)
+            draw_text(page, bbox, s["text"], s["size"], color=color,
+                      default_font=font_name, align=0)
             changed += 1
         except Exception:
             skipped += 1

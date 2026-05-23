@@ -53,9 +53,11 @@ class PDFDocument:
 
     # ---- undo support ----
     def _detect_line_style(self, page, rect):
-        """Read the font name, size and color of the existing text in a line,
-        so an edit can REUSE them (like Sejda does) instead of falling back to
-        a generic font. Returns (fontname, size, color_rgb01) or (None,...)."""
+        """Read the font name, size, color and weight of the existing text in
+        a line, so an edit can REUSE them (like Sejda does) instead of falling
+        back to a generic font.
+
+        Returns (fontname, size, color_rgb01, bold, italic) or (None,...)."""
         try:
             d = page.get_text("dict")
             best = None
@@ -66,18 +68,33 @@ class PDFDocument:
                         # does this span sit inside the clicked line area?
                         if (sb.y0 >= rect.y0 - 3 and sb.y1 <= rect.y1 + 3 and
                                 sb.x1 > rect.x0 - 3 and sb.x0 < rect.x1 + 3):
-                            if best is None or sb.width > best[0]:
+                            # Prefer the LARGEST font in the region (so a
+                            # heading's size wins), then the widest span.
+                            span_size = span.get("size", 0)
+                            score = (round(span_size, 1), sb.width)
+                            if best is None or score > best[0]:
                                 col = span.get("color", 0)
                                 r = ((col >> 16) & 255) / 255.0
                                 g = ((col >> 8) & 255) / 255.0
                                 b = (col & 255) / 255.0
-                                best = (sb.width, span.get("font", ""),
-                                        span.get("size", 0), (r, g, b))
+                                fontname = span.get("font", "")
+                                # PyMuPDF span "flags": bit 4 (16) = bold,
+                                # bit 1 (2) = italic. Also check the font name.
+                                flags = span.get("flags", 0)
+                                nm = fontname.lower()
+                                bold = bool(flags & 16) or "bold" in nm \
+                                    or "black" in nm or "heavy" in nm \
+                                    or "semibold" in nm
+                                italic = bool(flags & 2) or "italic" in nm \
+                                    or "oblique" in nm
+                                best = (score, fontname,
+                                        span.get("size", 0), (r, g, b),
+                                        bold, italic)
             if best:
-                return best[1], best[2], best[3]
+                return best[1], best[2], best[3], best[4], best[5]
         except Exception:
             pass
-        return None, None, None
+        return None, None, None, False, False
 
     def _usable_font(self, font_name):
         """Turn a detected font name into one PyMuPDF can actually write with.
@@ -115,7 +132,8 @@ class PDFDocument:
         # Read the ORIGINAL font, size and color FIRST (before we erase), so
         # the edit keeps the same look — this is how Sejda avoids changing the
         # style. We only fall back to a generic font if detection fails.
-        det_font, det_size, det_color = self._detect_line_style(page, rect)
+        det_font, det_size, det_color, det_bold, det_italic = \
+            self._detect_line_style(page, rect)
 
         # white-out the old text
         page.add_redact_annot(rect, fill=(1, 1, 1))
@@ -132,33 +150,37 @@ class PDFDocument:
             # font: reuse the detected one; fall back to hint/style
             fname = self._usable_font(det_font) if det_font \
                 else _builtin_font_for(font_hint)
-            # size: prefer the original detected size
-            size = (font_size or det_size
-                    or max(8.0, min(48.0, rect.height * 0.85)))
+            # size: the size read directly from the document (det_size) is the
+            # most reliable. A caller may pass font_size from a UI cache, but
+            # if it disagrees a lot with what's actually on the page, trust the
+            # document — this is what stops headings collapsing to body size.
+            if det_size and det_size > 0:
+                if font_size and abs(font_size - det_size) <= 1.5:
+                    size = font_size      # close enough, honour caller
+                else:
+                    size = det_size       # trust the real on-page size
+            else:
+                size = (font_size
+                        or max(8.0, min(48.0, rect.height * 0.85)))
             # Give the text room: let it extend to the right page edge and a
             # little below, so longer replacement text still fits.
             page_rect = page.rect
             box = fitz.Rect(rect.x0, rect.y0,
                             min(page_rect.x1 - 4, rect.x0 + rect.width * 4),
                             rect.y1 + size * 2)
-            placed = False
-            used = size
-            while used >= 5:
-                res = page.insert_textbox(box, new_text, fontname=fname,
-                                          fontsize=used, color=rgb, align=0,
-                                          render_mode=0)
-                if res >= 0:
-                    placed = True
-                    break
-                used -= 1
-            # Guaranteed fallback: insert_text never fails, so the line can
-            # NEVER just disappear, even if the textbox didn't fit.
-            if not placed:
+            # Draw via the shared helper: it auto-detects the script, shapes
+            # complex scripts correctly, and KEEPS the original size, color and
+            # bold/italic so a heading stays a heading after editing.
+            try:
+                from utils.fonts import draw_text
+                draw_text(page, box, new_text, size, color=rgb,
+                          default_font=fname, align=0,
+                          bold=det_bold, italic=det_italic)
+            except Exception:
+                # extreme fallback — never let the line vanish
                 try:
-                    page.insert_text((rect.x0, rect.y1 - 2), new_text,
-                                     fontname=fname,
-                                     fontsize=min(size, rect.height * 0.8),
-                                     color=rgb)
+                    page.insert_textbox(box, new_text, fontname=fname,
+                                        fontsize=size, color=rgb, align=0)
                 except Exception:
                     page.insert_text((rect.x0, rect.y1 - 2), new_text,
                                      fontsize=10, color=rgb)
@@ -203,8 +225,10 @@ class PDFDocument:
                         rect.y1 + size * 2)
         placed = False
         used = size
+        from utils.fonts import font_for_page
+        fn, ff = font_for_page(page, text)
         while used >= 5:
-            res = page.insert_textbox(box, text, fontname="helv",
+            res = page.insert_textbox(box, text, fontname=fn, fontfile=ff,
                                       fontsize=used, color=rgb, align=0,
                                       render_mode=0)
             if res >= 0:
@@ -402,14 +426,17 @@ class PDFDocument:
             except Exception:
                 hits = []
             if whole_word and hits:
-                # filter by word boundaries — simple approach using the page text
+                # filter by word boundaries — simple approach using the page text.
+                # Use casefold() rather than lower() so case-insensitive matching
+                # works correctly for non-English scripts (German ß, Greek, Turkish,
+                # accented letters, etc.).
                 words = page.get_text("words")
-                wanted = term.lower() if not case_sensitive else term
+                wanted = term if case_sensitive else term.casefold()
                 filtered = []
                 for rect in hits:
                     for w in words:
                         wx0, wy0, wx1, wy1, wtext, *_ = w
-                        wt = wtext if case_sensitive else wtext.lower()
+                        wt = wtext if case_sensitive else wtext.casefold()
                         if wt == wanted and abs(wx0 - rect.x0) < 1 and abs(wy0 - rect.y0) < 1:
                             filtered.append(rect)
                             break
@@ -430,6 +457,15 @@ class PDFDocument:
              garbage: int = 4, deflate: bool = True):
         """Save the PDF. If output_path is None, save in place."""
         target = output_path or self.path
+        # Stamp the producer so saved files show this app - a clean,
+        # professional touch with no third-party footprint.
+        try:
+            from utils.constants import APP_NAME, APP_VERSION
+            md = self.doc.metadata or {}
+            md["producer"] = f"{APP_NAME} {APP_VERSION}"
+            self.doc.set_metadata(md)
+        except Exception:
+            pass
         if target == self.path and incremental:
             self.doc.save(target, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
         else:

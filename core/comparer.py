@@ -11,6 +11,58 @@ import difflib
 import fitz
 
 
+# --- Unicode font support for non-Latin document content -----------------
+# The report's own labels are English, but the *quoted document text* can be
+# in any language (Bangla, Japanese, …). The standard PDF fonts (helv/hebo)
+# can't draw those, turning text into "??????". So for any line that isn't
+# plain Latin we embed and use a real Unicode font.
+
+def _needs_unicode(text: str) -> bool:
+    return any(ord(c) > 0xFF for c in (text or ""))
+
+
+_report_fonts_done = set()
+
+
+def _ensure_report_font(page) -> str | None:
+    """Register a Unicode font on the page's document (once) and return the
+    font alias to use, or None if no suitable font file is available."""
+    try:
+        from utils.fonts import bangla_font, wide_font
+    except Exception:
+        return None
+    font_path = bangla_font() or wide_font()
+    if not font_path:
+        return None
+    doc = page.parent
+    key = id(doc)
+    alias = "uni"
+    if key not in _report_fonts_done:
+        try:
+            page.insert_font(fontname=alias, fontfile=font_path)
+            _report_fonts_done.add(key)
+        except Exception:
+            return None
+    else:
+        # font already embedded in this doc, but each page needs the alias too
+        try:
+            page.insert_font(fontname=alias, fontfile=font_path)
+        except Exception:
+            pass
+    return alias
+
+
+def _content_font(page, text: str, default: str = "helv") -> str:
+    """Return the font alias to draw `text` with: the embedded Unicode font
+    for non-Latin text, otherwise the requested built-in font."""
+    if _needs_unicode(text):
+        alias = _ensure_report_font(page)
+        if alias:
+            return alias
+    return default
+
+
+
 def _page_text(doc, idx):
     if idx < 0 or idx >= doc.page_count:
         return None
@@ -324,6 +376,38 @@ def _human_size(n):
     return f"{n / (1024**2):.2f} MB"
 
 
+def _draw_donut(page, cx, cy, r_outer, r_inner, segments, total):
+    """Draw a donut (ring) chart. segments = [(value, (r,g,b)), ...].
+    Mimics the Adobe compare summary chart."""
+    import math
+    if total <= 0:
+        # empty grey ring
+        page.draw_circle(fitz.Point(cx, cy), r_outer, color=None,
+                         fill=(0.88, 0.88, 0.90))
+        page.draw_circle(fitz.Point(cx, cy), r_inner, color=None,
+                         fill=(1, 1, 1))
+        return
+    start = -90.0  # start at top
+    for value, color in segments:
+        if value <= 0:
+            continue
+        sweep = 360.0 * (value / total)
+        end = start + sweep
+        # draw the wedge as a filled pie slice, then punch the inner hole
+        steps = max(2, int(sweep / 4))
+        pts = [fitz.Point(cx, cy)]
+        a = start
+        for s in range(steps + 1):
+            ang = math.radians(a)
+            pts.append(fitz.Point(cx + r_outer * math.cos(ang),
+                                  cy + r_outer * math.sin(ang)))
+            a += sweep / steps
+        page.draw_polyline(pts, color=None, fill=color, closePath=True)
+        start = end
+    # punch the centre to make it a ring
+    page.draw_circle(fitz.Point(cx, cy), r_inner, color=None, fill=(1, 1, 1))
+
+
 def visual_region_diff(old_page, new_page, render_dpi: int = 110,
                        grid: int = 36, threshold: float = 0.04):
     """Find visual (non-text) differences between two pages — e.g. a swapped
@@ -544,6 +628,16 @@ def generate_compare_report(old_path: str,
                             for p, m in global_new_marks.items()}
 
     # ------ Summary block ------
+    # Build the change log now so we can show the Adobe-style breakdown
+    # (Insertions / Deletions / Replacements) and a donut chart up front.
+    changelog = build_full_changelog(old_path, new_path,
+                                     ignore_case, ignore_quotes)
+    ct = changelog["totals"]
+    n_ins = ct.get("inserted", 0)
+    n_del = ct.get("deleted", 0)
+    n_rep = ct.get("replaced", 0)
+    n_total = n_ins + n_del + n_rep
+
     summary_y = 270
     cover.insert_text((50, summary_y), "Summary",
                       fontname="hebo", fontsize=14)
@@ -567,6 +661,34 @@ def generate_compare_report(old_path: str,
                           color=(0.3, 0.3, 0.3))
         cover.insert_text((280, summary_y), val, fontname="hebo", fontsize=10)
         summary_y += 16
+
+    # ------ Adobe-style change breakdown: donut chart + category cards ------
+    chart_cx, chart_cy = A4_W - 145, 322
+    seg = [
+        (n_rep, (0.95, 0.74, 0.13)),   # replacements - amber
+        (n_ins, (0.15, 0.45, 0.95)),   # insertions   - blue
+        (n_del, (0.85, 0.22, 0.20)),   # deletions    - red
+    ]
+    _draw_donut(cover, chart_cx, chart_cy, 46, 27, seg, n_total)
+    # number in the centre (use insert_text centered manually)
+    num_str = str(n_total)
+    num_w = fitz.get_text_length(num_str, fontname="hebo", fontsize=18)
+    cover.insert_text((chart_cx - num_w / 2, chart_cy + 5), num_str,
+                      fontname="hebo", fontsize=18, color=(0.15, 0.15, 0.2))
+    cover.insert_textbox(
+        fitz.Rect(chart_cx - 46, chart_cy + 50, chart_cx + 46, chart_cy + 64),
+        "Total Changes", fontname="helv", fontsize=7, align=1,
+        color=(0.5, 0.5, 0.55))
+    # small category lines under the chart
+    cat_y = chart_cy + 80
+    for label, val, col in (("Replacements", n_rep, (0.95, 0.74, 0.13)),
+                            ("Insertions", n_ins, (0.15, 0.45, 0.95)),
+                            ("Deletions", n_del, (0.85, 0.22, 0.20))):
+        cover.draw_rect(fitz.Rect(chart_cx - 60, cat_y - 7, chart_cx - 50, cat_y + 1),
+                        color=None, fill=col)
+        cover.insert_text((chart_cx - 44, cat_y), f"{val}  {label}",
+                          fontname="helv", fontsize=9, color=(0.3, 0.3, 0.35))
+        cat_y += 15
 
     # Legend
     summary_y += 14
@@ -609,8 +731,7 @@ def generate_compare_report(old_path: str,
                       fontname="helv", fontsize=8, color=(0.55, 0.55, 0.55))
 
     # ------ Detailed change log pages ------
-    changelog = build_full_changelog(old_path, new_path,
-                                     ignore_case, ignore_quotes)
+    # (changelog was already built above for the summary chart)
 
     # List the pages that actually changed, right on the cover, so the
     # reader instantly sees WHERE the changes are.
@@ -941,12 +1062,12 @@ def _write_changelog_pages(report, changelog, page_w, page_h):
                 for i, ln in enumerate(old_lines):
                     prefix = "   \u2212 " if i == 0 else "      "
                     pg.insert_text((margin + 16, y), prefix + ln,
-                                   fontname="helv", fontsize=9, color=RED)
+                                   fontname=_content_font(pg, ln), fontsize=9, color=RED)
                     y += line_h
                 for i, ln in enumerate(new_lines):
                     prefix = "   + " if i == 0 else "      "
                     pg.insert_text((margin + 16, y), prefix + ln,
-                                   fontname="helv", fontsize=9, color=GREEN)
+                                   fontname=_content_font(pg, ln), fontsize=9, color=GREEN)
                     y += line_h
                 y += 3
             elif c["type"] == "insert":
@@ -959,7 +1080,7 @@ def _write_changelog_pages(report, changelog, page_w, page_h):
                 for i, ln in enumerate(new_lines):
                     prefix = "   + " if i == 0 else "      "
                     pg.insert_text((margin + 16, y), prefix + ln,
-                                   fontname="helv", fontsize=9, color=GREEN)
+                                   fontname=_content_font(pg, ln), fontsize=9, color=GREEN)
                     y += line_h
                 y += 3
             elif c["type"] == "delete":
@@ -972,7 +1093,7 @@ def _write_changelog_pages(report, changelog, page_w, page_h):
                 for i, ln in enumerate(old_lines):
                     prefix = "   \u2212 " if i == 0 else "      "
                     pg.insert_text((margin + 16, y), prefix + ln,
-                                   fontname="helv", fontsize=9, color=RED)
+                                   fontname=_content_font(pg, ln), fontsize=9, color=RED)
                     y += line_h
                 y += 3
         y += 6

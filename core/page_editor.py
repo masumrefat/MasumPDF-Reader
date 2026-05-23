@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 import fitz
+from utils.fonts import font_for_page
 
 
 def _hex_to_rgb01(hex_str: str):
@@ -89,23 +90,26 @@ def add_header_footer(pdf_document,
         if header_left:
             r = fitz.Rect(margin, header_top, margin + third_w,
                           header_top + header_h)
-            page.insert_textbox(r, _expand_tokens(header_left, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(header_left, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=0)
         if header_center:
             r = fitz.Rect(margin + third_w, header_top,
                           margin + 2 * third_w, header_top + header_h)
-            page.insert_textbox(r, _expand_tokens(header_center, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(header_center, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=1)
         if header_right:
             r = fitz.Rect(margin + 2 * third_w, header_top, w - margin,
                           header_top + header_h)
-            page.insert_textbox(r, _expand_tokens(header_right, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(header_right, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=2)
 
         # Footer band
@@ -113,23 +117,26 @@ def add_header_footer(pdf_document,
         if footer_left:
             r = fitz.Rect(margin, footer_bottom, margin + third_w,
                           footer_bottom + font_size + 4)
-            page.insert_textbox(r, _expand_tokens(footer_left, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(footer_left, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=0)
         if footer_center:
             r = fitz.Rect(margin + third_w, footer_bottom,
                           margin + 2 * third_w, footer_bottom + font_size + 4)
-            page.insert_textbox(r, _expand_tokens(footer_center, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(footer_center, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=1)
         if footer_right:
             r = fitz.Rect(margin + 2 * third_w, footer_bottom, w - margin,
                           footer_bottom + font_size + 4)
-            page.insert_textbox(r, _expand_tokens(footer_right, page_num_disp,
-                                                  total, filename),
-                                fontname=font, fontsize=font_size,
+            _hf_txt = _expand_tokens(footer_right, page_num_disp, total, filename)
+            _hf_fn, _hf_ff = font_for_page(page, _hf_txt, font)
+            page.insert_textbox(r, _hf_txt,
+                                fontname=_hf_fn, fontfile=_hf_ff, fontsize=font_size,
                                 color=rgb, align=2)
         count += 1
 
@@ -186,6 +193,20 @@ def add_text_to_page(pdf_document,
     rect = fitz.Rect(x, y - font_size, x + max_width, y - font_size + box_h)
     rgb = _hex_to_rgb01(color_hex)
     font = _builtin_font(style)
+
+    from utils.fonts import font_file_for
+    uni_font = font_file_for(text)
+    if uni_font:
+        # Non-Latin text (Bangla, etc.): embed a real font and write it into
+        # the page so the characters actually render.
+        try:
+            page.insert_textbox(rect, text, fontname="embedded",
+                                fontfile=uni_font, fontsize=font_size,
+                                color=rgb, align=0)
+            pdf_document.mark_dirty()
+            return
+        except Exception:
+            pass  # fall back to the standard path below
 
     # Use a FreeText annotation
     try:

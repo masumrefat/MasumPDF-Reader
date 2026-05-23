@@ -71,9 +71,25 @@ class AnnotationManager:
 
     def add_text_box(self, page_index: int, rect, text: str, color: str = "#000000",
                      font_size: int = 11):
-        """Add a free text annotation."""
+        """Add a free text annotation.
+
+        For non-Latin text (Bangla, etc.) the built-in PDF fonts can't draw
+        the characters, so we embed a real Unicode font and write the text
+        directly instead of using a FreeText annotation."""
+        from utils.fonts import font_file_for
         page = self.pdf.doc.load_page(page_index)
         r = fitz.Rect(rect)
+        font_path = font_file_for(text)
+        if font_path:
+            # Embed the font and draw the text so Bangla renders correctly.
+            try:
+                page.insert_textbox(
+                    r, text, fontname="embedded", fontfile=font_path,
+                    fontsize=font_size, color=_hex_to_rgb(color), align=0)
+                self.pdf.mark_dirty()
+                return None  # written into content stream, not an annotation
+            except Exception:
+                pass  # fall through to the standard annotation
         annot = page.add_freetext_annot(r, text, fontsize=font_size,
                                         text_color=_hex_to_rgb(color))
         annot.update()
@@ -113,7 +129,9 @@ class AnnotationManager:
     def add_ink(self, page_index: int, strokes: list, color: str = "#E53935", width: int = 2):
         """Freehand drawing. strokes = [[(x,y), (x,y), ...], ...]"""
         page = self.pdf.doc.load_page(page_index)
-        ink_strokes = [[fitz.Point(x, y) for x, y in stroke] for stroke in strokes]
+        # PyMuPDF wants a sequence of sequences of (x, y) float pairs.
+        ink_strokes = [[(float(x), float(y)) for x, y in stroke]
+                       for stroke in strokes]
         annot = page.add_ink_annot(ink_strokes)
         annot.set_colors(stroke=_hex_to_rgb(color))
         annot.set_border(width=width)

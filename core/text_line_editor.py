@@ -71,20 +71,12 @@ def edit_line_text(input_path: str,
     fname = _builtin_font_for(font_hint)
     size = font_size if font_size else max(8.0, min(48.0, rect.height * 0.85))
 
-    # Try with the requested size first; if it doesn't fit, shrink.
+    # Draw via the shared helper so complex scripts (Bangla conjuncts, etc.)
+    # are shaped correctly and every script gets a font that supports it.
+    from utils.fonts import draw_text
+    draw_text(page, rect, new_text, size, color=rgb, default_font=fname,
+              align=0)
     used_size = size
-    while used_size >= 5:
-        res = page.insert_textbox(
-            rect, new_text,
-            fontname=fname,
-            fontsize=used_size,
-            color=rgb,
-            align=0,
-            render_mode=0,
-        )
-        if res >= 0:
-            break
-        used_size -= 1
 
     doc.save(output_path, garbage=4, deflate=True)
     doc.close()

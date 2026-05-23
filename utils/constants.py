@@ -1,0 +1,77 @@
+"""Constants used across the MasumPDF Reader app."""
+
+APP_NAME = "MasumPDF Reader"
+APP_VERSION = "4.16.1"
+# GitHub repo used to check for newer versions (owner/repo).
+# Change this if your repository name is different.
+GITHUB_REPO = "masumrefat/MasumPDF-Reader"
+APP_ORG = "MasumPDF"
+APP_AUTHOR = "Chowdhury Mohammad Masum Refat"
+APP_LICENSE = "MIT License"
+APP_PURPOSE = "For education purpose only"
+
+# Zoom
+DEFAULT_ZOOM = 1.0
+MIN_ZOOM = 0.1
+MAX_ZOOM = 6.0
+ZOOM_STEP = 0.15
+ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
+
+# Thumbnails
+THUMBNAIL_WIDTH = 150
+THUMBNAIL_DPI = 50
+
+# Rendering
+# Base DPI controls how sharp pages look. Bumping this to 200 (≈2.78× the
+# PDF native 72 DPI) gives crisp text on any normal monitor. We also
+# multiply by the screen's device-pixel-ratio at render time, so a hi-DPI
+# (Retina / 4K / scaled-Windows) display ends up around 400 DPI internally.
+RENDER_DPI = 200
+
+# Quality presets the user can pick in Settings.
+# Higher = sharper but slower and more memory per cached page.
+RENDER_QUALITY_PRESETS = {
+    "Low (faster)":  120,
+    "Normal":        180,
+    "High":          240,
+    "Ultra":         320,
+}
+DEFAULT_RENDER_QUALITY = "Normal"
+
+# View modes
+VIEW_SINGLE = "single"
+VIEW_CONTINUOUS = "continuous"
+VIEW_TWO_PAGE = "two_page"
+
+# Themes
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+THEME_SYSTEM = "system"
+
+# History
+RECENT_FILES_MAX = 12
+
+# Annotation defaults
+DEFAULT_HIGHLIGHT_COLOR = "#FFEB3B"
+DEFAULT_PEN_COLOR = "#E53935"
+DEFAULT_PEN_WIDTH = 2
+
+# Filters for file dialogs
+PDF_FILTER = "PDF files (*.pdf)"
+IMAGE_FILTER = "Image files (*.png *.jpg *.jpeg *.bmp *.tiff)"
+
+# Supported OCR languages (codes follow tesseract)
+OCR_LANGUAGES = {
+    "English": "eng",
+    "Spanish": "spa",
+    "French": "fra",
+    "German": "deu",
+    "Italian": "ita",
+    "Portuguese": "por",
+    "Japanese": "jpn",
+    "Chinese (Simplified)": "chi_sim",
+    "Chinese (Traditional)": "chi_tra",
+    "Korean": "kor",
+    "Russian": "rus",
+    "Arabic": "ara",
+}

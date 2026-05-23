@@ -80,7 +80,15 @@ if not defined PYEXE (
 )
 
 REM ---- build the environment INSIDE the install folder ----
-echo   Setting up the app environment (a few minutes) ...
+echo   Setting up the app environment ...
+echo.
+echo   ---------------------------------------------------------
+echo    Now downloading the components (about 800 MB).
+echo    This takes about 15-20 minutes depending on your internet.
+echo    PLEASE BE PATIENT and leave this window open. It happens
+echo    only once.
+echo   ---------------------------------------------------------
+echo.
 pushd "%INSTALL_DIR%"
 "!PYEXE!" -m venv .venv
 ".venv\Scripts\python.exe" -m pip install --upgrade pip >nul 2>nul

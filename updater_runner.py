@@ -152,3 +152,9 @@ def _relaunch(python_exe, main_py):
 
 if __name__ == "__main__":
     main()
+    try:
+        # brief pause so the user can see the result before the window closes
+        print("\n[updater] This window will close shortly...")
+        time.sleep(3)
+    except Exception:
+        pass

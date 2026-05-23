@@ -28,7 +28,7 @@ def _make_splash(icons_dir):
     from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QBrush, QPen
     from PySide6.QtCore import Qt, QRectF
     from utils.constants import (APP_NAME, APP_VERSION, APP_AUTHOR,
-                                 APP_LICENSE, APP_PURPOSE)
+                                 APP_LICENSE, APP_PURPOSE, APP_TAGLINE)
 
     W, H = 520, 360
     canvas = QPixmap(W, H)
@@ -62,25 +62,30 @@ def _make_splash(icons_dir):
 
     p.setPen(QColor("#1B2A4A"))
     p.setFont(QFont("Segoe UI", 20, QFont.Bold))
-    p.drawText(QRectF(0, 150, W, 34), Qt.AlignHCenter, APP_NAME)
+    p.drawText(QRectF(0, 148, W, 34), Qt.AlignHCenter, APP_NAME)
+
+    # tagline / subtext
+    p.setPen(QColor("#2667FF"))
+    p.setFont(QFont("Segoe UI", 10, QFont.Bold))
+    p.drawText(QRectF(0, 180, W, 18), Qt.AlignHCenter, APP_TAGLINE)
 
     p.setPen(QColor("#8A8E98"))
     p.setFont(QFont("Segoe UI", 9))
-    p.drawText(QRectF(0, 184, W, 18), Qt.AlignHCenter, f"Version {APP_VERSION}")
+    p.drawText(QRectF(0, 200, W, 18), Qt.AlignHCenter, f"Version {APP_VERSION}")
 
     p.setPen(QColor("#2B2D33"))
     p.setFont(QFont("Segoe UI", 10))
-    p.drawText(QRectF(0, 214, W, 18), Qt.AlignHCenter,
+    p.drawText(QRectF(0, 226, W, 18), Qt.AlignHCenter,
                f"Created by {APP_AUTHOR}")
 
     p.setPen(QColor("#6B6F78"))
     p.setFont(QFont("Segoe UI", 9))
-    p.drawText(QRectF(0, 236, W, 18), Qt.AlignHCenter,
+    p.drawText(QRectF(0, 248, W, 18), Qt.AlignHCenter,
                f"{APP_LICENSE}  \u00b7  \u00a9 2026")
 
     p.setPen(QColor("#E01E26"))
     p.setFont(QFont("Segoe UI", 10, QFont.Bold))
-    p.drawText(QRectF(0, 270, W, 20), Qt.AlignHCenter, APP_PURPOSE)
+    p.drawText(QRectF(0, 278, W, 20), Qt.AlignHCenter, APP_PURPOSE)
 
     p.setPen(QColor("#9AA0AC"))
     p.setFont(QFont("Segoe UI", 8))
@@ -118,6 +123,57 @@ def main():
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(APP_ORG)
 
+    # Load the user's chosen interface language as early as possible, so every
+    # window built afterwards picks it up. Also mirror the layout for RTL
+    # languages (Arabic, etc.).
+    try:
+        from utils.settings import AppSettings
+        from utils.i18n import set_language, is_rtl
+        set_language(AppSettings().ui_language())
+        if is_rtl():
+            app.setLayoutDirection(Qt.RightToLeft)
+    except Exception:
+        pass
+
+    # Make sure the bundled script fonts (Bangla, Arabic, Hebrew, Thai,
+    # Devanagari) are available to the GUI itself, so menus/buttons and edited
+    # text render correctly in those languages even with no system font.
+    try:
+        from PySide6.QtGui import QFontDatabase
+        _fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "resources", "fonts")
+        if os.path.isdir(_fonts_dir):
+            for _fn in os.listdir(_fonts_dir):
+                if _fn.lower().endswith((".ttf", ".otf")):
+                    QFontDatabase.addApplicationFont(
+                        os.path.join(_fonts_dir, _fn))
+    except Exception:
+        pass
+
+    # For Japanese / Chinese the interface needs a CJK-capable font. A full CJK
+    # font is ~20 MB, so instead of bundling one we pick whichever CJK font is
+    # already installed (Windows, macOS and most Linux desktops ship one). If
+    # none is found the menus may show boxes — the app still works, just not
+    # pretty, and the user can install a CJK font.
+    try:
+        from utils.settings import AppSettings as _AS
+        from PySide6.QtGui import QFont, QFontDatabase
+        _code = _AS().ui_language()
+        if _code in ("ja", "zh"):
+            _families = set(QFontDatabase.families())
+            _prefer = {
+                "ja": ["Noto Sans CJK JP", "Yu Gothic", "Meiryo",
+                       "MS Gothic", "Hiragino Sans", "Noto Sans JP"],
+                "zh": ["Noto Sans CJK SC", "Microsoft YaHei", "SimSun",
+                       "PingFang SC", "Noto Sans SC", "WenQuanYi Zen Hei"],
+            }[_code]
+            for _fam in _prefer:
+                if _fam in _families:
+                    app.setFont(QFont(_fam))
+                    break
+    except Exception:
+        pass
+
     # Try to load an app icon if one is provided in resources/icons
     icons_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -143,9 +199,10 @@ def main():
 
     window = MainWindow()
     if splash is not None:
-        # keep the splash visible briefly so the info can be read
+        # Show the splash just briefly so the app feels fast to open while the
+        # author/version info is still readable.
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(1400, lambda: splash.finish(window))
+        QTimer.singleShot(800, lambda: splash.finish(window))
         window.show()
     else:
         window.show()

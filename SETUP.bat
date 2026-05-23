@@ -122,6 +122,14 @@ if not exist ".venv\Scripts\python.exe" (
     "!PYEXE!" -m venv .venv
     if errorlevel 1 ( echo   [ERROR] Could not create environment. & pause & exit /b 1 )
 )
+echo.
+echo   ---------------------------------------------------------
+echo    Now downloading the components (about 800 MB).
+echo    This takes about 15-20 minutes depending on your internet.
+echo    PLEASE BE PATIENT and leave this window open. It happens
+echo    only once - after this, the app opens fast.
+echo   ---------------------------------------------------------
+echo.
 ".venv\Scripts\python.exe" -m pip install --upgrade pip >nul 2>nul
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 (

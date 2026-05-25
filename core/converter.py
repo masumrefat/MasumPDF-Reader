@@ -37,15 +37,34 @@ class Converter:
     def images_to_pdf(image_paths: list[str], output_path: str):
         if not image_paths:
             raise ValueError("No images provided")
+
+        def _open_pdf_safe_image(path: str) -> Image.Image:
+            """Open an image and convert it safely for PDF output.
+
+            Important: simply calling convert("RGB") on a transparent PNG drops
+            the alpha channel onto a black background. This made transparent PNGs
+            look black after Image→PDF conversion. We flatten images with alpha
+            onto a white page instead, which is the expected PDF-paper look.
+            """
+            img = Image.open(path)
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                rgba = img.convert("RGBA")
+                white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                white.alpha_composite(rgba)
+                img.close()
+                return white.convert("RGB")
+            return img.convert("RGB")
+
         images = []
-        for p in image_paths:
-            img = Image.open(p).convert("RGB")
-            images.append(img)
-        first, rest = images[0], images[1:]
-        first.save(output_path, "PDF", resolution=100.0,
-                   save_all=True, append_images=rest)
-        for img in images:
-            img.close()
+        try:
+            for p in image_paths:
+                images.append(_open_pdf_safe_image(p))
+            first, rest = images[0], images[1:]
+            first.save(output_path, "PDF", resolution=100.0,
+                       save_all=True, append_images=rest)
+        finally:
+            for img in images:
+                img.close()
 
     # ---- extract text ----
     @staticmethod
@@ -63,17 +82,54 @@ class Converter:
                 f.write(full)
         return full
 
-    # ---- to DOCX (optional, requires python-docx) ----
+    # ---- to DOCX / Word ----
     @staticmethod
-    def pdf_to_docx(pdf_path: str, output_path: str) -> bool:
-        """Best-effort DOCX export. Returns True on success, False if dependency missing."""
+    def pdf_to_docx(pdf_path: str, output_path: str, progress_cb=None) -> bool:
+        """Best-effort PDF to Word conversion.
+
+        This creates a real .docx file using python-docx. It preserves readable
+        text page-by-page and inserts page breaks between PDF pages. For scanned
+        image-only PDFs, the resulting Word file may be empty unless the user runs
+        OCR first, because normal PDF text extraction cannot read pixels.
+
+        Returns True on success and False when python-docx is not installed.
+        """
         try:
             from docx import Document
+            from docx.shared import Pt
         except ImportError:
             return False
-        text = Converter.pdf_to_text(pdf_path)
-        doc = Document()
-        for paragraph in text.split("\n"):
-            doc.add_paragraph(paragraph)
-        doc.save(output_path)
+
+        docx = Document()
+        styles = docx.styles
+        styles["Normal"].font.name = "Arial"
+        styles["Normal"].font.size = Pt(10)
+
+        pdf = fitz.open(pdf_path)
+        total = max(pdf.page_count, 1)
+        try:
+            for page_no in range(pdf.page_count):
+                if progress_cb:
+                    progress_cb(page_no + 1, total)
+
+                page = pdf.load_page(page_no)
+                if pdf.page_count > 1:
+                    docx.add_paragraph(f"Page {page_no + 1}").style = styles["Heading 2"]
+
+                text = page.get_text("text") or ""
+                paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+                if paragraphs:
+                    for paragraph in paragraphs:
+                        docx.add_paragraph(paragraph)
+                else:
+                    docx.add_paragraph(
+                        "[No selectable text found on this page. Run OCR first for scanned PDFs.]"
+                    )
+
+                if page_no < pdf.page_count - 1:
+                    docx.add_page_break()
+        finally:
+            pdf.close()
+
+        docx.save(output_path)
         return True

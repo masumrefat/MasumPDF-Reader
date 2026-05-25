@@ -2,7 +2,7 @@
 
 Stores papers (with extracted metadata), user collections/folders, tags,
 favorites, and recent opens. Persisted to a JSON file so the library survives
-restarts. No AI, fully offline.
+restarts. Fully offline.
 
 A "paper" is identified by its file path. Metadata (title, author, year,
 keywords, DOI) is auto-extracted from the PDF when imported, and can be edited.
@@ -11,7 +11,9 @@ keywords, DOI) is auto-extracted from the PDF when imported, and can be edited.
 import os
 import re
 import json
+import uuid
 from datetime import datetime
+from urllib.parse import quote
 
 
 def library_path() -> str:
@@ -23,6 +25,7 @@ def library_path() -> str:
 
 _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
+_WEB_PREFIX = "weblink::"
 
 
 def extract_metadata(pdf_path: str) -> dict:
@@ -30,7 +33,7 @@ def extract_metadata(pdf_path: str) -> dict:
     Best-effort and offline — uses the PDF's own metadata first, then text."""
     import fitz
     info = {"title": "", "author": "", "year": "", "doi": "",
-            "keywords": "", "preview": ""}
+            "keywords": "", "preview": "", "url": ""}
     try:
         doc = fitz.open(pdf_path)
     except Exception:
@@ -57,11 +60,13 @@ def extract_metadata(pdf_path: str) -> dict:
             info["year"] = ym.group(0)
         elif _YEAR.search(first):
             info["year"] = _YEAR.search(first).group(0)
-        # title fallback: first non-empty line of page 1 if metadata empty
-        if not info["title"] and first:
+        # title fallback: many PDFs report unhelpful metadata like
+        # "untitled". Use the first meaningful line from page 1 instead.
+        bad_titles = {"", "untitled", "untitled document", "document"}
+        if info["title"].strip().lower() in bad_titles and first:
             for line in first.splitlines():
                 s = line.strip()
-                if len(s) > 8:
+                if len(s) > 8 and not s.lower().startswith(("doi:", "abstract")):
                     info["title"] = s[:200]
                     break
     finally:
@@ -69,6 +74,29 @@ def extract_metadata(pdf_path: str) -> dict:
     if not info["title"]:
         info["title"] = os.path.splitext(os.path.basename(pdf_path))[0]
     return info
+
+
+def normalize_web_link(url: str) -> str:
+    """Normalize a user-entered web link while keeping empty strings empty."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("doi:"):
+        return doi_to_url(url[4:].strip())
+    if url.startswith("10."):
+        return doi_to_url(url)
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url
+    return url
+
+
+def doi_to_url(doi: str) -> str:
+    doi = (doi or "").strip().removeprefix("doi:").strip()
+    if not doi:
+        return ""
+    if doi.startswith("http://") or doi.startswith("https://"):
+        return doi
+    return "https://doi.org/" + quote(doi, safe="/._;():-")
 
 
 class ResearchLibrary:
@@ -113,6 +141,7 @@ class ResearchLibrary:
                 "author": meta["author"],
                 "year": meta["year"],
                 "doi": meta["doi"],
+                "url": meta.get("url", ""),
                 "keywords": meta["keywords"],
                 "preview": meta["preview"],
                 "tags": [],
@@ -124,6 +153,68 @@ class ResearchLibrary:
             self.add_to_collection(collection, pdf_path)
         self.save()
         return new
+
+    def add_web_resource(self, title: str, url: str, about: str = "",
+                         tags: list | None = None, collection: str | None = None) -> str:
+        """Add a manual web resource to the research library.
+
+        This is not limited to papers: users can save datasets, project pages,
+        publisher pages, GitHub repositories, lab websites, tutorials, videos,
+        protocols, or any research-related web page with a short note about
+        what the link is for. Returns the internal resource id.
+        """
+        title = (title or "").strip()
+        url = normalize_web_link(url)
+        about = (about or "").strip()
+        if not title:
+            title = url or "Untitled web resource"
+        rid = _WEB_PREFIX + uuid.uuid4().hex[:12]
+        self.papers[rid] = {
+            "path": rid,
+            "filename": "",
+            "entry_type": "web",
+            "title": title,
+            "author": "",
+            "year": "",
+            "doi": "",
+            "url": url,
+            "about": about,
+            "keywords": about,
+            "preview": about,
+            "tags": [t.strip() for t in (tags or []) if str(t).strip()],
+            "favorite": False,
+            "added": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_opened": "",
+        }
+        if collection:
+            self.add_to_collection(collection, rid)
+        self.save()
+        return rid
+
+    def update_web_resource(self, resource_id: str, title: str | None = None,
+                            url: str | None = None, about: str | None = None,
+                            tags: list | None = None):
+        if resource_id not in self.papers:
+            return
+        item = self.papers[resource_id]
+        if item.get("entry_type") != "web" and not str(resource_id).startswith(_WEB_PREFIX):
+            return
+        if title is not None:
+            item["title"] = (title or "").strip() or item.get("title", "Untitled web resource")
+        if url is not None:
+            item["url"] = normalize_web_link(url)
+        if about is not None:
+            item["about"] = (about or "").strip()
+            item["keywords"] = item["about"]
+            item["preview"] = item["about"]
+        if tags is not None:
+            item["tags"] = [t.strip() for t in tags if str(t).strip()]
+        self.save()
+
+    def is_web_resource(self, item_or_path) -> bool:
+        if isinstance(item_or_path, dict):
+            return item_or_path.get("entry_type") == "web" or str(item_or_path.get("path", "")).startswith(_WEB_PREFIX)
+        return str(item_or_path).startswith(_WEB_PREFIX)
 
     def remove_paper(self, pdf_path: str):
         self.papers.pop(pdf_path, None)
@@ -138,11 +229,29 @@ class ResearchLibrary:
             self.save()
 
     def mark_opened(self, pdf_path: str):
-        pdf_path = os.path.abspath(pdf_path)
+        if not self.is_web_resource(pdf_path):
+            pdf_path = os.path.abspath(pdf_path)
         if pdf_path in self.papers:
             self.papers[pdf_path]["last_opened"] = \
                 datetime.now().strftime("%Y-%m-%d %H:%M")
             self.save()
+
+    def set_web_link(self, pdf_path: str, url: str):
+        """Save a paper's web page, DOI URL, publisher page, or project link."""
+        if pdf_path in self.papers:
+            self.papers[pdf_path]["url"] = normalize_web_link(url)
+            self.save()
+
+    def web_link_for(self, pdf_path: str) -> str:
+        """Return the best web link for a paper: manual link first, then DOI."""
+        p = self.papers.get(pdf_path, {})
+        url = normalize_web_link(p.get("url", ""))
+        if url:
+            return url
+        doi = (p.get("doi") or "").strip()
+        if doi:
+            return doi_to_url(doi)
+        return ""
 
     def set_tags(self, pdf_path: str, tags: list):
         if pdf_path in self.papers:
@@ -216,7 +325,9 @@ class ResearchLibrary:
                 blob = " ".join([
                     str(p.get("title", "")), str(p.get("author", "")),
                     str(p.get("keywords", "")), str(p.get("doi", "")),
-                    str(p.get("year", "")), " ".join(p.get("tags", [])),
+                    str(p.get("url", "")), str(p.get("about", "")),
+                    str(p.get("entry_type", "")), str(p.get("year", "")),
+                    " ".join(p.get("tags", [])),
                     str(p.get("filename", "")),
                 ]).lower()
                 if term not in blob:
@@ -225,8 +336,7 @@ class ResearchLibrary:
         return results
 
     def related(self, pdf_path: str) -> list:
-        """Papers sharing a tag or an author with the given one. (No AI —
-        relatedness is by shared tags/authors, which is honest and useful.)"""
+        """Papers sharing a tag or an author with the given one."""
         base = self.papers.get(pdf_path)
         if not base:
             return []

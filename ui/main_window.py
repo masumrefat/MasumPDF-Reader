@@ -9,9 +9,10 @@ from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QSplitter, QFileDialog, QMessageBox,
     QDockWidget, QStatusBar, QLabel, QInputDialog, QMenuBar, QMenu,
     QApplication, QProgressBar, QWidget, QVBoxLayout, QPushButton,
+    QToolBar, QToolButton, QLineEdit, QComboBox, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor
+from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor, QCursor, QIcon, QShortcut
 
 import os
 import json
@@ -30,7 +31,7 @@ from utils.file_utils import (
     human_size, open_containing_folder, make_backup, safe_unique_path, file_exists
 )
 from utils.settings import AppSettings
-from utils.worker_threads import OCRWorker, MergeWorker, ImageExportWorker
+from utils.worker_threads import OCRWorker, MergeWorker, ImageExportWorker, PdfToWordWorker
 from utils.constants import (
     APP_NAME, APP_VERSION, APP_AUTHOR, APP_LICENSE,
     THEME_DARK, THEME_LIGHT, RECENT_FILES_MAX,
@@ -45,6 +46,8 @@ from .dialogs import (
     SplitDialog, OCRDialog, SignatureDialog, SettingsDialog,
 )
 from .styles import get_stylesheet, viewer_background
+from .unified_sidebar import UnifiedSidebar
+from .icons import make_icon
 from utils.i18n import tr
 
 
@@ -63,29 +66,44 @@ class PDFTab(QWidget):
         self._search_hits: dict = {}
         self._flat_hits: list = []  # [(page, hit_index), ...]
         self._active_hit_idx: int = -1
+        self._last_search_term: str = ""
+        self._last_search_case_sensitive: bool = False
+        self._last_search_whole_word: bool = False
+        self._pending_search_text: str = ""
+        self._auto_fit_after_layout = True
+        self._auto_fit_timer_active = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         from ui.tools_panel import AllToolsPanel
-        from ui.collapsible import CollapsiblePanel
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(0)  # fixed premium layout; users do not resize sidebars
 
-        # Far left: All Tools panel (wrapped so it can minimize)
-        from utils.constants import THEME_DARK
-        is_dark = (self.settings.theme() == THEME_DARK)
+        # Premium fixed sidebars.  Tools stay on the left.  Pages/Outline and
+        # Comments/Properties live on the right, each opened from one clear rail
+        # icon.  Both sidebars are fixed-width so users cannot accidentally
+        # resize them and break the reading layout.
+        is_dark = False
         self.tools_panel = AllToolsPanel(dark=is_dark)
-        self.tools_wrap = CollapsiblePanel("All Tools", self.tools_panel,
-                                           side="left")
-        self.tools_wrap.setMinimumWidth(self.tools_wrap.RAIL_WIDTH)
-
-        # Left: Pages / Outline (thumbnails + outline tabs)
         self.left_side = LeftSidebar()
-        self.left_wrap = CollapsiblePanel("Pages & Outline", self.left_side,
-                                          side="right")
-        self.left_wrap.setMinimumWidth(self.left_wrap.RAIL_WIDTH)
+        self.right_side = RightSidebar()
+        self.tools_sidebar = UnifiedSidebar(
+            panel_items=[("All Tools", "tools", self.tools_panel, "tools")],
+            title="All Tools",
+        )
+        # Pages/Outline and Comments/Properties now live in the same slim
+        # right-side reading rail as the page controls.  This removes the extra
+        # separate sidebar and uses the space the user already sees.
+        self.info_sidebar = None
+        # Compatibility names used by existing menu actions.
+        self.unified_sidebar = self.tools_sidebar
+        self.tools_wrap = self.tools_sidebar
+        self.left_wrap = None
+        self.right_wrap = None
+        self._install_left_rail_view_controls()
 
         # Center: the viewer (never collapsible)
         self.viewer = PDFViewer()
@@ -93,16 +111,34 @@ class PDFTab(QWidget):
         # Thin vertical annotation bar beside the PDF (self-contained per tab).
         self._annot_color = "#FFD54F"
         self.annot_bar = self._build_annot_bar()
+        self.annot_bar_wrap = self._wrap_annot_bar(self.annot_bar)
         # Right-side navigation rail (page number, prev/next, zoom, refresh).
         self.nav_rail = self._build_nav_rail()
-        from PySide6.QtWidgets import QWidget as _QW, QHBoxLayout as _QHB
+        self.right_info_panel = self._build_right_info_panel()
+        self.right_info_panel.hide()
+
+        # Per-PDF text search bar. It stays hidden until the user clicks Search
+        # on the right rail or presses Ctrl+F. This gives the app a clear,
+        # normal PDF-reader search option even though the large top toolbar is hidden.
+        self.search_bar = self._build_search_bar()
+        self.search_bar.hide()
+
+        from PySide6.QtWidgets import QWidget as _QW, QHBoxLayout as _QHB, QVBoxLayout as _QVB
         self.viewer_wrap = _QW()
-        _vh = _QHB(self.viewer_wrap)
+        _root = _QVB(self.viewer_wrap)
+        _root.setContentsMargins(0, 0, 0, 0)
+        _root.setSpacing(0)
+        _root.addWidget(self.search_bar)
+
+        _row = _QW()
+        _vh = _QHB(_row)
         _vh.setContentsMargins(0, 0, 0, 0)
         _vh.setSpacing(0)
-        _vh.addWidget(self.annot_bar)
+        _vh.addWidget(self.annot_bar_wrap)
         _vh.addWidget(self.viewer, 1)
+        _vh.addWidget(self.right_info_panel)
         _vh.addWidget(self.nav_rail)
+        _root.addWidget(_row, 1)
 
         # Floating "Back to text" button — appears over the PDF after the user
         # clicks a citation/link, so they can return to where they were with
@@ -119,31 +155,27 @@ class PDFTab(QWidget):
         self.back_to_text_btn.clicked.connect(self._on_back_to_text)
         self.viewer.link_jumped.connect(self._show_back_to_text)
 
-        # Right: Comments / Properties
-        self.right_side = RightSidebar()
-        self.right_wrap = CollapsiblePanel("Comments", self.right_side,
-                                           side="right")
-        self.right_wrap.setMinimumWidth(self.right_wrap.RAIL_WIDTH)
-
-        self.splitter.addWidget(self.tools_wrap)
+        self.splitter.addWidget(self.tools_sidebar)
         self.splitter.addWidget(self.viewer_wrap)
-        self.splitter.addWidget(self.left_wrap)
-        self.splitter.addWidget(self.right_wrap)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setStretchFactor(2, 0)
-        self.splitter.setStretchFactor(3, 0)
-        self.splitter.setSizes([210, 700, 200, 260])
+        self.splitter.setSizes([UnifiedSidebar.RAIL_WIDTH, 1000])
         layout.addWidget(self.splitter)
 
-        # Comments / Properties starts minimized so the PDF gets more room.
-        # The user can click the rail to show it whenever they need it.
-        self.right_wrap.collapse()
+        # Fast PDF search: do not rescan every keystroke.  The user can type
+        # normally, then the actual document search runs once after a short
+        # pause.  This removes the lag that happened when every typed letter
+        # triggered a full-page PyMuPDF search across the whole document.
+        self._pdf_search_timer = QTimer(self)
+        self._pdf_search_timer.setSingleShot(True)
+        self._pdf_search_timer.setInterval(180)
+        self._pdf_search_timer.timeout.connect(self._run_pending_pdf_search)
 
-        # When any panel collapses or expands, give/take the space from the
-        # viewer so the PDF always fills the freed area.
-        for wrap in (self.tools_wrap, self.left_wrap, self.right_wrap):
-            wrap.collapsed_changed.connect(self._rebalance_splitter)
+        # Start in clean reading mode: All Tools is icon-only.  Pages/Outline
+        # and Comments are opened from the right rail only when needed.
+        self.tools_sidebar.collapse()
+        QTimer.singleShot(0, self._rebalance_splitter)
+        self.tools_sidebar.collapsed_changed.connect(self._rebalance_splitter)
 
         # Connect signals
         self.left_side.page_requested.connect(self.viewer.goto_page)
@@ -154,90 +186,472 @@ class PDFTab(QWidget):
 
         # accept drops on the tab too — but the window already handles them
 
+
+    def _build_search_bar(self):
+        """Compact in-document text search bar shown above the PDF."""
+        from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QLineEdit, QToolButton
+        from PySide6.QtCore import QSize
+        bar = QWidget()
+        bar.setObjectName("PdfSearchBar")
+        bar.setFixedHeight(38)
+        is_dark = self._is_dark_mode()
+        bg = "#0F172A" if is_dark else "#F8FAFC"
+        border = "#334155" if is_dark else "#D7DEEA"
+        text = "#F8FAFC" if is_dark else "#172033"
+        muted = "#CBD5E1" if is_dark else "#64748B"
+        field_bg = "#111827" if is_dark else "#FFFFFF"
+        hover = "#1E293B" if is_dark else "#E8EEF8"
+        accent = "#93C5FD" if is_dark else "#2563EB"
+        bar.setStyleSheet(
+            f"QWidget#PdfSearchBar {{ background: {bg}; border-bottom: 1px solid {border}; color: {text}; }}"
+            f"QLabel {{ color: {text}; background: transparent; }}"
+            f"QLabel#SearchCountLabel {{ color: {muted}; font-size: 12px; min-width: 54px; }}"
+            f"QLineEdit {{ background: {field_bg}; color: {text}; border: 1px solid {border};"
+            " border-radius: 13px; padding: 4px 10px; selection-background-color: #2563EB; }"
+            f"QLineEdit:focus {{ border: 1px solid {accent}; }}"
+            f"QToolButton {{ border: none; border-radius: 12px; padding: 3px 8px; color: {text}; background: transparent; }}"
+            f"QToolButton:hover {{ background: {hover}; color: {accent}; }}"
+        )
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(10, 4, 8, 4)
+        lay.setSpacing(7)
+        title = QLabel("Find")
+        title.setStyleSheet("font-weight: 700;")
+        lay.addWidget(title)
+
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("PdfSearchInput")
+        self.search_input.setPlaceholderText("Type text to find in this PDF")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_pdf_search_text_changed)
+        self.search_input.returnPressed.connect(self.search_next)
+        try:
+            self.search_input.installEventFilter(self)
+        except Exception:
+            pass
+        lay.addWidget(self.search_input, 1)
+
+        self.search_count_label = QLabel("0 / 0")
+        self.search_count_label.setObjectName("SearchCountLabel")
+        self.search_count_label.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.search_count_label)
+
+        def small_btn(text, tip, fn, width=32):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setFixedSize(QSize(width, 26))
+            b.clicked.connect(fn)
+            lay.addWidget(b)
+            return b
+
+        self.search_prev_btn = small_btn("↑", "Previous search result", self.search_prev)
+        self.search_next_btn = small_btn("↓", "Next search result", self.search_next)
+        small_btn("×", "Close search", self.hide_search_bar)
+        return bar
+
+    def show_search_bar(self):
+        """Open the in-PDF search bar and focus the text field.
+
+        Ctrl+F should feel like a normal PDF reader: the find box appears
+        inside the PDF area, the current text is selected, and typing starts
+        searching the open PDF immediately.
+        """
+        if not hasattr(self, "search_bar"):
+            return
+        self.search_bar.show()
+        try:
+            self.search_bar.raise_()
+        except Exception:
+            pass
+        self.search_input.setFocus(Qt.ShortcutFocusReason)
+        self.search_input.selectAll()
+        # Opening Ctrl+F must be instant.  If text already exists, reuse the
+        # cached result when possible and only schedule a delayed refresh.
+        try:
+            if self.search_input.text() and self.search_input.text() != self._last_search_term:
+                self._pending_search_text = self.search_input.text()
+                self._pdf_search_timer.start()
+        except Exception:
+            pass
+        self._update_search_count()
+
+    def hide_search_bar(self):
+        """Close search and clear temporary search highlights."""
+        if hasattr(self, "search_bar"):
+            self.search_bar.hide()
+        try:
+            self._pdf_search_timer.stop()
+        except Exception:
+            pass
+        if hasattr(self, "search_input"):
+            self.search_input.blockSignals(True)
+            self.search_input.clear()
+            self.search_input.blockSignals(False)
+        self.search("")
+        try:
+            self.viewer.setFocus(Qt.ShortcutFocusReason)
+        except Exception:
+            pass
+
+    def _on_pdf_search_text_changed(self, text: str):
+        # Debounced search keeps Ctrl+F responsive on large research PDFs.
+        self._pending_search_text = text
+        if not text:
+            try:
+                self._pdf_search_timer.stop()
+            except Exception:
+                pass
+            self.search("")
+            return
+        if text == self._last_search_term:
+            self._update_search_count()
+            return
+        if hasattr(self, "search_count_label"):
+            self.search_count_label.setText("Searching…")
+        try:
+            self._pdf_search_timer.start()
+        except Exception:
+            self.search(text)
+
+    def _run_pending_pdf_search(self):
+        text = getattr(self, "_pending_search_text", "")
+        self.search(text)
+
+    def eventFilter(self, obj, event):
+        """Keyboard polish for the PDF search field."""
+        try:
+            from PySide6.QtCore import QEvent
+            if obj is getattr(self, "search_input", None) and event.type() == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self.hide_search_bar()
+                    return True
+                if event.key() in (Qt.Key_Return, Qt.Key_Enter) and (event.modifiers() & Qt.ShiftModifier):
+                    self.search_prev()
+                    return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _update_search_count(self):
+        total = len(getattr(self, "_flat_hits", []))
+        current = (getattr(self, "_active_hit_idx", -1) + 1) if total else 0
+        if hasattr(self, "search_count_label"):
+            self.search_count_label.setText(f"{current} / {total}")
+        no_hits = bool(hasattr(self, "search_input") and self.search_input.text() and total == 0)
+        if hasattr(self, "search_count_label"):
+            self.search_count_label.setToolTip("No results found" if no_hits else "Search result count")
+
+    def _install_left_rail_view_controls(self):
+        """Place view/app controls directly in the slim left rail.
+
+        Order requested by user:
+        All Tools first, then page/view options, zoom controls lower down,
+        then Language and Theme after zoom near the bottom of the sidebar.
+        """
+        try:
+            from PySide6.QtWidgets import QMenu, QApplication
+            from utils.i18n import available_languages, current_language
+            from utils.constants import COLOR_THEMES, APPEARANCES
+
+            rail = self.tools_sidebar
+
+            def apply_view_mode(mode: str):
+                # Change the page-view mode immediately, then auto-fit after the
+                # canvas relayout is complete.  Two short queued fits make the
+                # result reliable without blocking the UI.
+                try:
+                    viewer = getattr(self, "viewer", None)
+                    if viewer:
+                        viewer.set_view_mode(mode)
+                        QTimer.singleShot(0, viewer.fit_width)
+                        QTimer.singleShot(60, viewer.fit_width)
+                except Exception:
+                    pass
+
+            def apply_language(code: str):
+                try:
+                    win = self.window()
+                    if hasattr(win, "_on_toolbar_language_changed"):
+                        win._on_toolbar_language_changed(code)
+                except Exception:
+                    pass
+
+            def apply_theme(appearance: str | None = None, color_code: str | None = None):
+                try:
+                    win = self.window()
+                    if hasattr(win, "_on_toolbar_app_theme_changed"):
+                        win._on_toolbar_app_theme_changed(
+                            appearance or self.settings.appearance(),
+                            color_code or self.settings.theme(),
+                        )
+                except Exception:
+                    pass
+
+            # View controls near the top, directly after All Tools.
+            rail.add_rail_action("fit_width", "Fit width", lambda: self.viewer.fit_width(), text="W", size=48)
+            rail.add_rail_action("fit_page", "Fit page", lambda: self.viewer.fit_page(), text="P", size=48)
+
+            view_menu = QMenu(rail)
+            for label, mode in (("Continuous", "continuous"), ("Single page", "single"), ("Two pages", "two_page")):
+                act = view_menu.addAction(label)
+                act.triggered.connect(lambda checked=False, m=mode: apply_view_mode(m))
+            rail.add_rail_action("pages", "Page view", menu=view_menu)
+
+            # Keep the reading/research shortcuts directly before zoom.
+            # These are icon-only vector buttons: no text on the rail.
+            rail.add_rail_flexible_spacer()
+
+            def mark_reference_from_rail():
+                win = self.window()
+                if hasattr(win, "action_mark_reference_toggle"):
+                    win.action_mark_reference_toggle()
+
+            def save_note_from_rail():
+                win = self.window()
+                if hasattr(win, "action_save_notes_toggle"):
+                    win.action_save_notes_toggle()
+
+            rail.add_rail_action(
+                "reference",
+                "Mark collected references",
+                mark_reference_from_rail,
+            )
+            rail.add_rail_action(
+                "note",
+                "Save selected text as note",
+                save_note_from_rail,
+            )
+
+            rail.add_rail_action("zoom_out", "Zoom out", lambda: self.viewer.zoom_out())
+            rail.rail_zoom_label = rail.add_rail_label("100%", "Current zoom")
+            rail.add_rail_action("zoom_in", "Zoom in", lambda: self.viewer.zoom_in())
+
+            # Language and Theme now appear after the zoom controls, as requested.
+            lang_menu = QMenu(rail)
+            cur_lang = current_language()
+            for code, name in available_languages().items():
+                act = lang_menu.addAction(("✓ " if code == cur_lang else "   ") + f"{code.upper()} — {name}")
+                act.triggered.connect(lambda checked=False, c=code: apply_language(c))
+            rail.add_rail_action("language", "Language", menu=lang_menu)
+
+            # Flat theme menu: no sub-branches, no visible drop-down arrow on the rail.
+            theme_menu = QMenu(rail)
+            cur_app = self.settings.appearance()
+            cur_color = self.settings.theme()
+            for code, name in APPEARANCES.items():
+                act = theme_menu.addAction(("✓ " if code == cur_app else "   ") + name)
+                act.triggered.connect(lambda checked=False, a=code: apply_theme(appearance=a))
+            theme_menu.addSeparator()
+            for code, name in COLOR_THEMES.items():
+                act = theme_menu.addAction(("✓ " if code == cur_color else "   ") + name)
+                act.triggered.connect(lambda checked=False, c=code: apply_theme(color_code=c))
+            rail.add_rail_action("theme", "Theme", menu=theme_menu)
+            try:
+                rail.refresh_rail_colors(self._is_dark_mode())
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _wrap_annot_bar(self, annot_bar):
+        """Keep annotation tools as a compact floating rail, not a full-height app sidebar."""
+        from PySide6.QtWidgets import QWidget, QVBoxLayout
+        wrap = QWidget()
+        wrap.setObjectName("AnnotBarWrap")
+        wrap.setFixedWidth(44)
+        wrap.setStyleSheet("QWidget#AnnotBarWrap { background: transparent; border: none; }")
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(4, 10, 3, 0)
+        lay.setSpacing(0)
+        lay.addWidget(annot_bar, 0, Qt.AlignTop)
+        lay.addStretch(1)
+        return wrap
+
+    def _is_dark_mode(self) -> bool:
+        """Return current app dark-mode state for hand-styled widgets."""
+        try:
+            return self.settings.appearance() == "dark"
+        except Exception:
+            return False
+
+    def _refresh_local_dark_widgets(self):
+        """Rebuild small hand-styled rails so their text/icons remain readable in dark mode."""
+        try:
+            if hasattr(self, "tools_sidebar") and hasattr(self.tools_sidebar, "refresh_rail_colors"):
+                self.tools_sidebar.refresh_rail_colors(self._is_dark_mode())
+        except Exception:
+            pass
+        try:
+            parent = self.annot_bar_wrap.parentWidget() if hasattr(self, "annot_bar_wrap") else None
+            layout = parent.layout() if parent is not None else None
+            if layout is not None:
+                old_wrap = self.annot_bar_wrap
+                old_bar = self.annot_bar
+                idx = layout.indexOf(old_wrap)
+                layout.removeWidget(old_wrap)
+                old_wrap.deleteLater()
+                old_bar.deleteLater()
+                self.annot_bar = self._build_annot_bar()
+                self.annot_bar_wrap = self._wrap_annot_bar(self.annot_bar)
+                layout.insertWidget(max(0, idx), self.annot_bar_wrap)
+        except Exception:
+            pass
+        try:
+            parent = self.nav_rail.parentWidget() if hasattr(self, "nav_rail") else None
+            layout = parent.layout() if parent is not None else None
+            if layout is not None:
+                old = self.nav_rail
+                idx = layout.indexOf(old)
+                layout.removeWidget(old)
+                old.deleteLater()
+                self.nav_rail = self._build_nav_rail()
+                layout.insertWidget(max(0, idx), self.nav_rail)
+                self._nav_sync()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "right_info_panel"):
+                visible = self.right_info_panel.isVisible()
+                old = self.right_info_panel
+                parent = old.parentWidget()
+                layout = parent.layout() if parent is not None else None
+                idx = layout.indexOf(old) if layout is not None else -1
+                if layout is not None:
+                    layout.removeWidget(old)
+                    old.deleteLater()
+                    self.right_info_panel = self._build_right_info_panel()
+                    if not visible:
+                        self.right_info_panel.hide()
+                    layout.insertWidget(max(0, idx), self.right_info_panel)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "search_bar"):
+                visible = self.search_bar.isVisible()
+                old_text = self.search_input.text() if hasattr(self, "search_input") else ""
+                parent = self.search_bar.parentWidget()
+                layout = parent.layout() if parent is not None else None
+                idx = layout.indexOf(self.search_bar) if layout is not None else -1
+                if layout is not None:
+                    layout.removeWidget(self.search_bar)
+                    self.search_bar.deleteLater()
+                    self.search_bar = self._build_search_bar()
+                    self.search_input.setText(old_text)
+                    if not visible:
+                        self.search_bar.hide()
+                    layout.insertWidget(max(0, idx), self.search_bar)
+                    self._update_search_count()
+        except Exception:
+            pass
+
     def _build_annot_bar(self):
         """Thin vertical markup toolbar next to the PDF (self-contained)."""
         from PySide6.QtWidgets import QWidget, QVBoxLayout, QToolButton
         from PySide6.QtCore import QSize
         bar = QWidget()
-        bar.setFixedWidth(46)
+        bar.setObjectName("AnnotBar")
+        bar.setFixedWidth(37)
+        bar.setFixedHeight(224)
+        bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        is_dark = self._is_dark_mode()
+        bg = "rgba(17,24,39,0.97)" if is_dark else "rgba(248,250,252,0.96)"
+        border = "#334155" if is_dark else "#DDE3ED"
+        text = "#E5E7EB" if is_dark else "#475569"
+        hover = "rgba(96,165,250,0.18)" if is_dark else "rgba(37,99,235,0.08)"
+        checked = "rgba(96,165,250,0.26)" if is_dark else "rgba(37,99,235,0.12)"
+        accent = "#93C5FD" if is_dark else "#2563EB"
         bar.setStyleSheet(
-            "QWidget { background: #F4F5F7; border-right: 1px solid #DDD; }"
-            "QToolButton { border: none; padding: 6px; border-radius: 6px; "
-            "font-size: 17px; }"
-            "QToolButton:hover { background: #E2E6EE; }"
-            "QToolButton:checked { background: #2667FF; color: white; }")
+            f"QWidget#AnnotBar {{ background: {bg}; border: 1px solid {border}; border-radius: 18px; }}"
+            f"QToolButton {{ border: none; padding: 0px; border-radius: 14px; color: {text}; background: transparent; }}"
+            f"QToolButton:hover {{ background: {hover}; color: {accent}; }}"
+            f"QToolButton:checked {{ background: {checked}; color: {accent}; }}"
+            "QToolButton::menu-indicator { image: none; width: 0px; height: 0px; subcontrol-position: right center; }")
         v = QVBoxLayout(bar)
-        v.setContentsMargins(4, 8, 4, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(3, 7, 3, 7)
+        v.setSpacing(3)
         self._annot_buttons = []
+        annot_icon_size = 18
 
-        def add_btn(symbol, tip, tool):
+        def _apply_icon(button, icon_name):
+            button.setIcon(make_icon(icon_name, "#E5E7EB" if self._is_dark_mode() else "#475569", annot_icon_size))
+            button.setIconSize(QSize(annot_icon_size, annot_icon_size))
+            button.setText("")
+
+        def add_btn(symbol, tip, tool, icon_name=None):
             b = QToolButton()
-            b.setText(symbol)
             b.setToolTip(tip)
             b.setCheckable(True)
-            b.setFixedSize(QSize(38, 38))
+            b.setFixedSize(QSize(31, 31))
+            if icon_name:
+                _apply_icon(b, icon_name)
+            else:
+                b.setText(symbol)
             b.clicked.connect(lambda: self._annot_pick_tool(tool, b))
             v.addWidget(b)
             self._annot_buttons.append(b)
             return b
 
-        add_btn("\u2196", "Select / normal mode", "none")
+        add_btn("", "Select / normal mode", "none", "select")
 
         # Highlight tool with a dropdown: Highlight / Underline / Strikethrough
         self._add_annot_menu_btn(
-            v, "\u270F", "Text markup",
-            [("\u270F  Highlight", lambda: self._set_highlight_style("highlight")),
-             ("\u0332U  Underline", lambda: self._set_highlight_style("underline")),
-             ("\u0336S  Strikethrough", lambda: self._set_highlight_style("strikeout"))])
+            v, "", "Text markup",
+            [("Highlight", lambda: self._set_highlight_style("highlight")),
+             ("Underline", lambda: self._set_highlight_style("underline")),
+             ("Strikeout", lambda: self._set_highlight_style("strikeout"))], "highlight")
 
         # Draw / shapes dropdown: Free-hand / Line / Rectangle / Circle
         self._add_annot_menu_btn(
-            v, "\u270D", "Draw & shapes",
-            [("\u270D  Free-hand draw", lambda: self._annot_pick_tool_named("ink")),
-             ("\u2014  Line", lambda: self._annot_pick_tool_named("line_highlight")),
-             ("\u25AD  Rectangle", lambda: self._annot_pick_tool_named("rect")),
-             ("\u25CB  Circle", lambda: self._annot_pick_tool_named("circle"))])
+            v, "", "Draw & shapes",
+            [("Free-hand draw", lambda: self._annot_pick_tool_named("ink")),
+             ("Line", lambda: self._annot_pick_tool_named("line_highlight")),
+             ("Rectangle", lambda: self._annot_pick_tool_named("rect")),
+             ("Circle", lambda: self._annot_pick_tool_named("circle"))], "draw")
 
         # Marks dropdown: X mark / Checkmark / Dot
         self._add_annot_menu_btn(
-            v, "\u2715", "Marks",
-            [("\u2715  Cross / X mark", lambda: self._set_mark_kind("xmark")),
-             ("\u2713  Check mark", lambda: self._set_mark_kind("check")),
-             ("\u2022  Dot", lambda: self._set_mark_kind("dot"))])
+            v, "", "Marks",
+            [("Cross / X mark", lambda: self._set_mark_kind("xmark")),
+             ("Check mark", lambda: self._set_mark_kind("check")),
+             ("Dot", lambda: self._set_mark_kind("dot"))], "mark_x")
 
-        add_btn("\u2014", "Underline a line — click a line", "line_highlight")
+        add_btn("", "Underline a line — click a line", "line_highlight", "underline")
 
         # thin divider line between tools and the color picker
         from PySide6.QtWidgets import QFrame
         div = QFrame()
         div.setFrameShape(QFrame.HLine)
-        div.setStyleSheet("color: #D5D8DF; background: #D5D8DF; max-height: 1px;")
+        div.setStyleSheet("color: #334155; background: #334155; max-height: 1px;" if self._is_dark_mode() else "color: #D5D8DF; background: #D5D8DF; max-height: 1px;")
         div.setFixedHeight(1)
-        v.addSpacing(6)
+        v.addSpacing(4)
         v.addWidget(div)
-        v.addSpacing(6)
+        v.addSpacing(4)
 
         # small, subtle color dot (not a big bright box)
         self.annot_color_btn = QToolButton()
         self.annot_color_btn.setToolTip("Annotation color — click to change")
-        self.annot_color_btn.setFixedSize(QSize(38, 38))
+        self.annot_color_btn.setFixedSize(QSize(31, 31))
         self._style_color_dot()
         self.annot_color_btn.clicked.connect(self._annot_pick_color)
         v.addWidget(self.annot_color_btn)
-        v.addStretch(1)
         return bar
 
-    def _add_annot_menu_btn(self, layout, symbol, tip, options):
-        """A toolbar button that opens a small popup menu of sub-tools
-        (Adobe-style). `options` is a list of (label, callback)."""
+    def _add_annot_menu_btn(self, layout, symbol, tip, options, icon_name=None):
+        """A toolbar button that opens a small popup menu of sub-tools without a visible arrow."""
         from PySide6.QtWidgets import QToolButton, QMenu
         from PySide6.QtCore import QSize
         b = QToolButton()
-        b.setText(symbol)
         b.setToolTip(tip)
         b.setCheckable(True)
-        b.setFixedSize(QSize(38, 38))
+        b.setFixedSize(QSize(31, 31))
+        if icon_name:
+            b.setIcon(make_icon(icon_name, "#E5E7EB" if self._is_dark_mode() else "#475569", 18))
+            b.setIconSize(QSize(18, 18))
+            b.setText("")
+        else:
+            b.setText(symbol)
+        b.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; height: 0px; }")
         menu = QMenu(b)
         for label, cb in options:
             act = menu.addAction(label)
@@ -271,15 +685,17 @@ class PDFTab(QWidget):
     def _style_color_dot(self):
         """Render the color picker as a small round dot inside the button,
         not a big bright rectangle."""
+        ring = "#64748B" if self._is_dark_mode() else "#C9CDD6"
+        hover = "rgba(96,165,250,0.18)" if self._is_dark_mode() else "rgba(37,99,235,0.08)"
         self.annot_color_btn.setStyleSheet(
             "QToolButton {"
-            "  border: none; border-radius: 6px;"
+            "  border: none; border-radius: 14px;"
             f" background: qradialgradient(cx:0.5, cy:0.5, radius:0.26,"
             f"   fx:0.5, fy:0.5, stop:0 {self._annot_color},"
-            f"   stop:0.78 {self._annot_color}, stop:0.82 #C9CDD6,"
+            f"   stop:0.78 {self._annot_color}, stop:0.82 {ring},"
             f"   stop:0.86 transparent, stop:1 transparent);"
             "}"
-            "QToolButton:hover { background-color: #E2E6EE; }")
+            f"QToolButton:hover {{ background-color: {hover}; }}")
 
     def _annot_pick_tool(self, tool, btn):
         for b in self._annot_buttons:
@@ -301,22 +717,34 @@ class PDFTab(QWidget):
             pass
 
     def _build_nav_rail(self):
-        """Right-side navigation rail: page box, prev/next, refresh, zoom."""
+        """Right reading rail: page navigation + Pages/Outline + Comments.
+
+        The rail uses the vertical space that was previously mostly empty, so
+        users do not need a second right sidebar.  Clicking a rail button opens
+        a fixed-width premium panel beside the PDF.
+        """
         from PySide6.QtWidgets import (QWidget, QVBoxLayout, QToolButton,
                                        QSpinBox, QLabel, QFrame)
         from PySide6.QtCore import QSize, Qt
         rail = QWidget()
-        rail.setFixedWidth(52)
+        rail.setObjectName("ReadingRail")
+        rail.setFixedWidth(56)
+        is_dark = self._is_dark_mode()
+        rail_bg = "#0F172A" if is_dark else "#F7F9FC"
+        rail_border = "#334155" if is_dark else "#D7DEEA"
+        rail_text = "#F8FAFC" if is_dark else "#172033"
+        rail_hover = "#1E293B" if is_dark else "#E8EEF8"
+        rail_checked = "#1E3A8A" if is_dark else "#DDE8FF"
+        rail_accent = "#BFDBFE" if is_dark else "#0B56D0"
         rail.setStyleSheet(
-            "QWidget { background: #F4F5F7; border-left: 1px solid #DDD; }"
-            "QToolButton { border: none; padding: 6px; border-radius: 6px;"
-            " font-size: 17px; }"
-            "QToolButton:hover { background: #E2E6EE; }"
-            "QSpinBox { border: 1px solid #CCC; border-radius: 4px;"
-            " padding: 2px; }")
+            f"QWidget#ReadingRail {{ background: {rail_bg}; border-left: 1px solid {rail_border}; color: {rail_text}; }}"
+            f"QToolButton {{ border: none; padding: 5px; border-radius: 8px; font-size: 16px; color: {rail_text}; background: transparent; }}"
+            f"QToolButton:hover {{ background: {rail_hover}; color: {rail_accent}; }}"
+            f"QToolButton:checked {{ background: {rail_checked}; color: {rail_accent}; }}"
+            f"QSpinBox {{ border: 1px solid {rail_border}; border-radius: 6px; padding: 2px; background: {rail_bg}; color: {rail_text}; }}")
         v = QVBoxLayout(rail)
         v.setContentsMargins(6, 10, 6, 10)
-        v.setSpacing(6)
+        v.setSpacing(7)
         v.setAlignment(Qt.AlignHCenter)
 
         # current page box
@@ -325,52 +753,143 @@ class PDFTab(QWidget):
         self.nav_page_box.setMaximum(1)
         self.nav_page_box.setButtonSymbols(QSpinBox.NoButtons)
         self.nav_page_box.setAlignment(Qt.AlignCenter)
-        self.nav_page_box.setFixedWidth(40)
+        self.nav_page_box.setFixedWidth(42)
         self.nav_page_box.setToolTip("Current page — type a number and press Enter")
         self.nav_page_box.editingFinished.connect(self._nav_go_to_typed_page)
         v.addWidget(self.nav_page_box, 0, Qt.AlignHCenter)
 
         # total pages label
         self.nav_total_lbl = QLabel("—")
-        self.nav_total_lbl.setStyleSheet("color:#666; font-size: 12px;")
+        self.nav_total_lbl.setStyleSheet("color:#CBD5E1; font-size: 12px;" if self._is_dark_mode() else "color:#59657A; font-size: 12px;")
         self.nav_total_lbl.setAlignment(Qt.AlignCenter)
         v.addWidget(self.nav_total_lbl, 0, Qt.AlignHCenter)
 
-        def btn(symbol, tip, fn):
+        def divider():
+            line = QFrame(); line.setFrameShape(QFrame.HLine)
+            line.setStyleSheet("color:#334155; background:#334155; max-height:1px;" if self._is_dark_mode() else "color:#DDE3EC; background:#DDE3EC; max-height:1px;")
+            v.addWidget(line)
+
+        def btn(symbol, tip, fn, checkable=False):
             b = QToolButton()
             b.setText(symbol)
             b.setToolTip(tip)
-            b.setFixedSize(QSize(38, 34))
+            b.setCheckable(checkable)
+            b.setFixedSize(QSize(42, 36))
             b.clicked.connect(fn)
             v.addWidget(b, 0, Qt.AlignHCenter)
             return b
 
         btn("\u25B2", "Previous page", self._nav_prev)
         btn("\u25BC", "Next page", self._nav_next)
+        divider()
 
-        line0 = QFrame(); line0.setFrameShape(QFrame.HLine)
-        line0.setStyleSheet("color:#DDD;")
-        v.addWidget(line0)
+        # Text search option, always visible in the reading rail.
+        self.nav_search_btn = btn("⌕", "Search text in this PDF (Ctrl+F)", self.show_search_bar)
+        divider()
+
+        # Integrated side-panel openers.  These replace the old separate right
+        # sidebar rail and make the available vertical space useful.
+        self.nav_pages_btn = btn("\u2630", "Open Pages & Outline",
+                                 lambda: self._toggle_right_info_panel("pages"), True)
+        self.nav_comments_btn = btn("\u25A1", "Open Comments & Properties",
+                                    lambda: self._toggle_right_info_panel("comments"), True)
+        divider()
 
         # Back / Forward — jump to where you were before clicking a link
         self.nav_back_btn = btn("\u2190", "Go back (after clicking a link)",
                                 self._nav_back)
         self.nav_fwd_btn = btn("\u2192", "Go forward", self._nav_forward)
-
-        line = QFrame(); line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color:#DDD;")
-        v.addWidget(line)
+        divider()
 
         btn("\u21BB", "Reload / refresh the page", self._nav_refresh)
         btn("\u2398", "Fit page to width", self._nav_fit)
-        btn("\u2295", "Zoom in", lambda: self.viewer.zoom_in())
-        btn("\u2296", "Zoom out", lambda: self.viewer.zoom_out())
+        # Zoom + / − were removed from the right rail.  Zoom now lives only
+        # in the left rail so the right side stays clean and reading-focused.
         v.addStretch(1)
         return rail
+
+
+    def _build_right_info_panel(self):
+        """Fixed premium panel opened from the right reading rail."""
+        from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QStackedWidget
+        from PySide6.QtCore import QSize
+        panel = QWidget()
+        panel.setObjectName("RightInfoPanel")
+        panel.setFixedWidth(318)
+        is_dark = self._is_dark_mode()
+        panel_bg = "#111827" if is_dark else "#FFFFFF"
+        panel_border = "#334155" if is_dark else "#D7DEEA"
+        panel_text = "#F8FAFC" if is_dark else "#172033"
+        panel_hover = "#1E293B" if is_dark else "#EEF3FA"
+        panel.setStyleSheet(
+            f"QWidget#RightInfoPanel {{ background: {panel_bg}; border-left: 1px solid {panel_border}; color: {panel_text}; }}"
+            f"QLabel#RightInfoTitle {{ font-size: 13px; font-weight: 700; color: {panel_text}; background: transparent; }}"
+            f"QToolButton#RightInfoClose {{ border: none; border-radius: 8px; padding: 4px; color: {panel_text}; background: transparent; }}"
+            f"QToolButton#RightInfoClose:hover {{ background: {panel_hover}; }}"
+        )
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        header = QWidget()
+        header.setFixedHeight(44)
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(14, 0, 8, 0)
+        self.right_info_title = QLabel("Pages & Outline")
+        self.right_info_title.setObjectName("RightInfoTitle")
+        hl.addWidget(self.right_info_title)
+        hl.addStretch(1)
+        close = QToolButton()
+        close.setObjectName("RightInfoClose")
+        close.setText("\u00D7")
+        close.setToolTip("Close panel")
+        close.setFixedSize(QSize(30, 30))
+        close.clicked.connect(self._hide_right_info_panel)
+        hl.addWidget(close)
+        root.addWidget(header)
+
+        self.right_info_stack = QStackedWidget()
+        self.right_info_stack.addWidget(self.left_side)
+        self.right_info_stack.addWidget(self.right_side)
+        root.addWidget(self.right_info_stack, 1)
+        return panel
+
+    def _toggle_right_info_panel(self, which: str):
+        """Open/close Pages/Outline or Comments inside the right reading rail."""
+        target = 0 if which == "pages" else 1
+        title = "Pages & Outline" if which == "pages" else "Comments & Properties"
+        already_open = self.right_info_panel.isVisible() and self.right_info_stack.currentIndex() == target
+        if already_open:
+            self._hide_right_info_panel()
+            return
+        self.right_info_stack.setCurrentIndex(target)
+        self.right_info_title.setText(title)
+        self.right_info_panel.show()
+        self.nav_pages_btn.setChecked(target == 0)
+        self.nav_comments_btn.setChecked(target == 1)
+        self._schedule_auto_fit_width(80)
+
+    def _hide_right_info_panel(self):
+        self.right_info_panel.hide()
+        if hasattr(self, "nav_pages_btn"):
+            self.nav_pages_btn.setChecked(False)
+        if hasattr(self, "nav_comments_btn"):
+            self.nav_comments_btn.setChecked(False)
+        self._schedule_auto_fit_width(80)
+
+    def show_pages_panel(self):
+        self._toggle_right_info_panel("pages")
+
+    def show_comments_panel(self):
+        self._toggle_right_info_panel("comments")
 
     def _nav_sync(self):
         """Keep the rail's page box + total in sync with the document."""
         if not self.document:
+            self._search_hits = {}
+            self._flat_hits = []
+            self._active_hit_idx = -1
+            self._update_search_count()
             return
         try:
             cur = self.viewer.canvas.current_page() + 1
@@ -555,23 +1074,46 @@ class PDFTab(QWidget):
         QMessageBox.information(self, "Exported", f"Annotations saved to:\n{path}")
 
     def _rebalance_splitter(self, *_):
-        """Resize columns so collapsed panels shrink to their rail and the
-        viewer absorbs the freed space."""
+        """Keep fixed sidebars stable and give all remaining space to PDF.
+
+        When a sidebar opens/collapses, the PDF viewport width changes.  We
+        immediately refit the current page/pair to the new space so the user
+        does not need to click Fit W manually.
+        """
         sizes = self.splitter.sizes()
-        if len(sizes) != 4:
+        if len(sizes) != 2:
             return
-        total = sum(sizes)
-        rail = 26  # CollapsiblePanel.RAIL_WIDTH
+        total = max(760, sum(sizes))
+        left_w = (UnifiedSidebar.RAIL_WIDTH if self.tools_sidebar.is_collapsed()
+                  else UnifiedSidebar.PANEL_WIDTH)
+        self.splitter.setSizes([left_w, max(420, total - left_w)])
+        # Do not auto-render Fit Width on every sidebar open/close.  Re-rendering
+        # large PDF pages here caused the left sidebar buttons to feel laggy.
+        # Users can still use the Fit W rail button when they want refitting.
 
-        def want(wrap, current):
-            return rail if wrap.is_collapsed() else max(current, 170)
+    def _schedule_auto_fit_width(self, delay_ms: int = 80):
+        """Debounced automatic Fit Width after layout/sidebar changes."""
+        if not self._auto_fit_after_layout or not self.document:
+            return
+        if self._auto_fit_timer_active:
+            return
+        self._auto_fit_timer_active = True
 
-        tools_w = want(self.tools_wrap, 210 if not self.tools_wrap.is_collapsed() else rail)
-        left_w = want(self.left_wrap, 200 if not self.left_wrap.is_collapsed() else rail)
-        right_w = want(self.right_wrap, 260 if not self.right_wrap.is_collapsed() else rail)
-        viewer_w = max(300, total - tools_w - left_w - right_w)
-        # order is now: tools, viewer, pages(left), comments(right)
-        self.splitter.setSizes([tools_w, viewer_w, left_w, right_w])
+        def _run():
+            self._auto_fit_timer_active = False
+            if self.document:
+                try:
+                    self.viewer.fit_width()
+                except Exception:
+                    pass
+
+        QTimer.singleShot(delay_ms, _run)
+
+    def resizeEvent(self, event):
+        # Do not auto-fit on every resize.  Re-rendering PDF pages during
+        # resizing/sidebar changes makes the interface feel laggy.  The user
+        # can still press Fit W instantly from the left rail.
+        super().resizeEvent(event)
 
     def _refresh_right_sidebar(self):
         if not self.document:
@@ -607,13 +1149,30 @@ class PDFTab(QWidget):
     def search(self, term: str, case_sensitive: bool = False, whole_word: bool = False):
         if not self.document:
             return
+        term = term or ""
         if not term:
             self._search_hits = {}
             self._flat_hits = []
             self._active_hit_idx = -1
+            self._last_search_term = ""
             self.viewer.set_search_highlights({}, None)
+            self._update_search_count()
             return
+
+        # Reuse the last full-document result when the user presses Ctrl+F,
+        # Enter, or clicks around without changing the query.
+        if (term == self._last_search_term and
+                case_sensitive == self._last_search_case_sensitive and
+                whole_word == self._last_search_whole_word):
+            active = self._flat_hits[self._active_hit_idx] if self._flat_hits and self._active_hit_idx >= 0 else None
+            self.viewer.set_search_highlights(self._search_hits, active)
+            self._update_search_count()
+            return
+
         self._search_hits = self.document.search_text(term, case_sensitive, whole_word)
+        self._last_search_term = term
+        self._last_search_case_sensitive = case_sensitive
+        self._last_search_whole_word = whole_word
         # flatten
         self._flat_hits = []
         for page in sorted(self._search_hits.keys()):
@@ -622,20 +1181,25 @@ class PDFTab(QWidget):
         self._active_hit_idx = 0 if self._flat_hits else -1
         active = self._flat_hits[0] if self._flat_hits else None
         self.viewer.set_search_highlights(self._search_hits, active)
+        self._update_search_count()
 
     def search_next(self):
         if not self._flat_hits:
+            self._update_search_count()
             return
         self._active_hit_idx = (self._active_hit_idx + 1) % len(self._flat_hits)
         active = self._flat_hits[self._active_hit_idx]
         self.viewer.set_search_highlights(self._search_hits, active)
+        self._update_search_count()
 
     def search_prev(self):
         if not self._flat_hits:
+            self._update_search_count()
             return
         self._active_hit_idx = (self._active_hit_idx - 1) % len(self._flat_hits)
         active = self._flat_hits[self._active_hit_idx]
         self.viewer.set_search_highlights(self._search_hits, active)
+        self._update_search_count()
 
 
 class MainWindow(QMainWindow):
@@ -691,14 +1255,26 @@ class MainWindow(QMainWindow):
         self._autosave_timer = QTimer(self)
         self._autosave_timer.timeout.connect(self._on_autosave)
 
+        # Reading chrome auto-hide state.  When a PDF is open, the menu bar,
+        # toolbars, and tab strip stay hidden for a distraction-free reading
+        # area.  Moving the cursor to the top edge temporarily reveals them.
+        self._reading_auto_hide_enabled = False
+        self._top_chrome_revealed = True
+        self._top_chrome_timer = QTimer(self)
+        self._top_chrome_timer.setInterval(180)
+        self._top_chrome_timer.timeout.connect(self._update_top_chrome_visibility)
+
         self._build_central()
         self._build_toolbar()
+        self._build_compact_toolbar()
         self._build_menus()
         self._build_statusbar()
+        self.optional_panel_dock = None
 
         self.setAcceptDrops(True)
         self._apply_theme()
         self._configure_autosave()
+        self._install_pdf_search_shortcuts()
 
         # restore geometry
         geom = self.settings.load_geometry()
@@ -717,6 +1293,31 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _install_pdf_search_shortcuts(self):
+        """Reliable PDF find shortcuts independent of menu focus.
+
+        Some Windows/PySide focus paths can swallow QAction shortcuts when the
+        PDF canvas or a side panel has focus. Dedicated QShortcut objects make
+        Ctrl+F, Enter, Shift+Enter, and Esc work consistently.
+        """
+        try:
+            find_shortcut = QShortcut(QKeySequence.Find, self)
+            find_shortcut.setContext(Qt.ApplicationShortcut)
+            find_shortcut.activated.connect(self._focus_pdf_search)
+            self._find_shortcut = find_shortcut
+
+            esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+            esc_shortcut.setContext(Qt.ApplicationShortcut)
+            esc_shortcut.activated.connect(self._escape_from_pdf_search)
+            self._search_escape_shortcut = esc_shortcut
+        except Exception:
+            pass
+
+    def _escape_from_pdf_search(self):
+        t = self.current_tab()
+        if t and hasattr(t, "search_bar") and t.search_bar.isVisible():
+            t.hide_search_bar()
+
     # ---- UI construction ----
     def _build_central(self):
         self.tab_widget = QTabWidget()
@@ -725,6 +1326,10 @@ class MainWindow(QMainWindow):
         self.tab_widget.setDocumentMode(True)
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
         self.tab_widget.currentChanged.connect(self._tab_changed)
+        self.tab_pdf_count_label = QLabel("PDFs: 0")
+        self.tab_pdf_count_label.setObjectName("OpenPdfCountBadge")
+        self.tab_pdf_count_label.setToolTip("Number of PDF files currently open")
+        self.tab_widget.setCornerWidget(self.tab_pdf_count_label, Qt.TopRightCorner)
         # Make the close (×) button reliably visible on every platform by
         # drawing our own icon and applying it to each tab's close button.
         self._install_tab_close_icons()
@@ -771,8 +1376,10 @@ class MainWindow(QMainWindow):
         self.tab_widget.currentChanged.connect(lambda *_: apply_icons())
 
     def _build_toolbar(self):
+        # Keep MainToolbar as a hidden compatibility object for existing signal/state code.
+        # The visible top area is now only the menu bar + PDF tabs.
         self.toolbar = MainToolbar(self)
-        self.addToolBar(Qt.TopToolBarArea, self.toolbar)
+        self.toolbar.hide()
         tb = self.toolbar
         tb.open_requested.connect(self.action_open)
         tb.save_requested.connect(self.action_save)
@@ -794,6 +1401,8 @@ class MainWindow(QMainWindow):
         tb.convert_to_images_requested.connect(self.action_export_images)
         tb.images_to_pdf_requested.connect(self.action_images_to_pdf)
         tb.extract_text_requested.connect(self.action_extract_text)
+        if hasattr(tb, "pdf_to_word_requested"):
+            tb.pdf_to_word_requested.connect(self.action_pdf_to_word)
         tb.ocr_requested.connect(self.action_ocr)
         tb.encrypt_requested.connect(self.action_encrypt)
         tb.decrypt_requested.connect(self.action_decrypt)
@@ -801,6 +1410,8 @@ class MainWindow(QMainWindow):
         tb.annotate_highlight_requested.connect(self.action_highlight_toggle)
         tb.annotate_note_requested.connect(self.action_note_hint)
         tb.theme_toggle_requested.connect(self.action_toggle_theme)
+        tb.color_theme_changed.connect(self._on_toolbar_color_theme_changed)
+        tb.app_theme_changed.connect(self._on_toolbar_app_theme_changed)
         tb.properties_requested.connect(self.action_properties)
         tb.compress_requested.connect(self.action_compress)
         tb.compare_requested.connect(self.action_compare)
@@ -815,6 +1426,79 @@ class MainWindow(QMainWindow):
         tb.mark_reference_requested.connect(self.action_mark_reference_toggle)
         tb.save_note_requested.connect(self.action_save_notes_toggle)
         tb.language_changed.connect(self._on_toolbar_language_changed)
+        tb.home_requested.connect(self.action_home)
+        tb.tools_bar_toggle_requested.connect(self._toggle_top_tools_bar)
+
+    def _build_compact_toolbar(self):
+        """No visible compact toolbar. Top bar remains menu + PDF tabs only."""
+        self.compact_toolbar = QToolBar("Compact toolbar", self)
+        self.compact_toolbar.setObjectName("CompactToolbar")
+        self.compact_toolbar.hide()
+        self.compact_pdf_count_label = QLabel("PDFs: 0")
+        self.compact_lang = None
+        self.compact_theme_btn = None
+
+    def _toggle_top_tools_bar(self):
+        """Top toolbar hiding was removed; open the left tools sidebar instead."""
+        try:
+            t = self.current_tab()
+            if isinstance(t, PDFTab):
+                t.tools_sidebar.expand()
+                self.status_msg.setText("View controls are in the All Tools sidebar.")
+        except Exception:
+            pass
+
+    def _auto_hide_top_tools_for_pdf(self):
+        """Auto-hide removed: keep menu bar and PDF tabs visible."""
+        self._reading_auto_hide_enabled = False
+        try:
+            self._top_chrome_timer.stop()
+        except Exception:
+            pass
+        self._set_top_chrome_visible(True)
+
+    def _set_top_chrome_visible(self, visible: bool):
+        """Top chrome no longer auto-hides. Keep menu bar and PDF tabs visible."""
+        self._top_chrome_revealed = True
+        try:
+            self.menuBar().setVisible(True)
+        except Exception:
+            pass
+        try:
+            self.toolbar.hide()
+            self.compact_toolbar.hide()
+        except Exception:
+            pass
+        try:
+            self.tab_widget.tabBar().setVisible(True)
+        except Exception:
+            pass
+
+    def _update_top_chrome_visibility(self):
+        """Disabled because topbar hiding was removed."""
+        return
+
+    def _leave_reading_auto_hide(self):
+        """Restore normal chrome, used for Home/non-PDF tabs."""
+        self._reading_auto_hide_enabled = False
+        try:
+            self._top_chrome_timer.stop()
+        except Exception:
+            pass
+        self._set_top_chrome_visible(True)
+
+    def action_home(self):
+        """Open or switch to the Home tab."""
+        for i in range(self.tab_widget.count()):
+            w = self.tab_widget.widget(i)
+            if getattr(w, "_is_home_page", False):
+                self.tab_widget.setCurrentIndex(i)
+                return
+        self._open_welcome_tab(force=True)
+
+    def _update_context_state(self):
+        """Refresh optional context-dependent UI state."""
+        return
 
     def _build_menus(self):
         mb: QMenuBar = self.menuBar()
@@ -909,7 +1593,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.a_undo)
         edit_menu.addSeparator()
         a_find = QAction(tr("Find…"), self); a_find.setShortcut("Ctrl+F")
-        a_find.triggered.connect(lambda: self.toolbar.search_input.setFocus())
+        a_find.triggered.connect(self._focus_pdf_search)
         edit_menu.addAction(a_find)
         a_props = QAction(tr("Document properties…"), self); a_props.triggered.connect(self.action_properties)
         edit_menu.addAction(a_props)
@@ -944,6 +1628,7 @@ class MainWindow(QMainWindow):
             (tr("Export pages as images…"), self.action_export_images),
             (tr("Build PDF from images…"), self.action_images_to_pdf),
             (tr("Extract text…"), self.action_extract_text),
+            (tr("PDF to Word (.docx)…"), self.action_pdf_to_word),
             (tr("Run OCR…"), self.action_ocr),
             (tr("Encrypt PDF…"), self.action_encrypt),
             (tr("Decrypt PDF…"), self.action_decrypt),
@@ -960,20 +1645,55 @@ class MainWindow(QMainWindow):
 
         # Help
         help_menu = mb.addMenu(tr("Help"))
+        # PDF Side panel disabled by user request.
         a_about = QAction(tr("About {app}").replace("{app}", APP_NAME), self); a_about.triggered.connect(self.action_about)
         help_menu.addAction(a_about)
         a_update = QAction(tr("Check for updates…"), self)
         a_update.triggered.connect(lambda: self.action_check_updates(manual=True))
         help_menu.addAction(a_update)
 
+    def _open_pdf_count(self) -> int:
+        """Number of real PDF documents currently open (Home tab excluded)."""
+        try:
+            return sum(1 for i in range(self.tab_widget.count())
+                       if isinstance(self.tab_widget.widget(i), PDFTab))
+        except Exception:
+            return 0
+
+    def _update_open_pdf_count_badge(self):
+        """Refresh all places that show how many PDFs are open."""
+        count = self._open_pdf_count()
+        text = f"PDFs: {count}" if count != 1 else "PDF: 1"
+        try:
+            self.open_pdf_count_label.setText(text)
+        except Exception:
+            pass
+        try:
+            self.compact_pdf_count_label.setText(text)
+        except Exception:
+            pass
+        try:
+            self.tab_widget.setToolTip(f"{count} PDF file(s) open")
+        except Exception:
+            pass
+        try:
+            self.tab_pdf_count_label.setText(text)
+        except Exception:
+            pass
+
     def _build_statusbar(self):
         from PySide6.QtWidgets import QSpinBox
         sb = QStatusBar()
         self.setStatusBar(sb)
         self.status_page = QLabel("Page —")
+        self.status_page.setObjectName("StatusPage")
         self.status_zoom = QLabel("Zoom 100%")
+        self.status_zoom.setObjectName("StatusZoom")
         self.status_msg = QLabel("Ready")
-        self.status_msg.setStyleSheet("color: gray;")
+        self.status_msg.setObjectName("StatusMessage")
+        self.open_pdf_count_label = QLabel("PDFs: 0")
+        self.open_pdf_count_label.setObjectName("OpenPdfCountBadge")
+        self.open_pdf_count_label.setToolTip("Number of PDF files currently open")
 
         # Jump-to-page box: type a page number and press Enter to go there.
         self.page_jump = QSpinBox()
@@ -984,10 +1704,17 @@ class MainWindow(QMainWindow):
         self.page_jump.setFixedWidth(110)
         self.page_jump.editingFinished.connect(self._on_page_jump)
 
+        # Bottom status bar removed for distraction-free reading.
+        # Keep the widgets created so existing page/zoom/status update code remains safe,
+        # but do not show a bottom bar in the main window. Page/zoom/open-PDF info
+        # is available from the compact/top controls instead.
         sb.addWidget(self.status_msg, 1)
+        sb.addPermanentWidget(self.open_pdf_count_label)
         sb.addPermanentWidget(self.page_jump)
         sb.addPermanentWidget(self.status_page)
         sb.addPermanentWidget(self.status_zoom)
+        sb.hide()
+        sb.setMaximumHeight(0)
 
     def _on_page_jump(self):
         t = self.current_tab()
@@ -1002,20 +1729,56 @@ class MainWindow(QMainWindow):
     # ---- theme ----
     def _apply_theme(self):
         theme = self.settings.theme()
-        QApplication.instance().setStyleSheet(get_stylesheet(theme))
-        is_dark = (theme == THEME_DARK)
-        # update viewer backgrounds + tool panel icon colors
+        appearance = self.settings.appearance()
+        QApplication.instance().setStyleSheet(get_stylesheet(theme, appearance))
+        is_dark = (appearance == "dark")
         for i in range(self.tab_widget.count()):
             w = self.tab_widget.widget(i)
             if isinstance(w, PDFTab):
-                w.viewer.set_background_color(viewer_background(theme))
+                w.viewer.set_background_color(viewer_background(theme, appearance))
                 if hasattr(w, "tools_panel"):
                     w.tools_panel.set_dark(is_dark)
+                if hasattr(w, "_refresh_local_dark_widgets"):
+                    w._refresh_local_dark_widgets()
+        try:
+            self.toolbar.refresh_color_selector()
+            if hasattr(self, "compact_theme_btn"):
+                self.toolbar._build_theme_menu()
+                self.compact_theme_btn.setMenu(self.toolbar.theme_btn.menu())
+        except Exception:
+            pass
+
+    def _on_toolbar_app_theme_changed(self, appearance: str, color_code: str):
+        old = (self.settings.appearance(), self.settings.theme())
+        if appearance not in ("light", "dark"):
+            appearance = old[0]
+        self.settings.set_app_theme(appearance, color_code)
+        if old == (self.settings.appearance(), self.settings.theme()):
+            return
+        self._apply_theme()
+        try:
+            from utils.constants import COLOR_THEMES, APPEARANCES
+            self.status_msg.setText(
+                f"Theme applied: {APPEARANCES.get(self.settings.appearance())} / "
+                f"{COLOR_THEMES.get(self.settings.theme(), self.settings.theme())}")
+        except Exception:
+            pass
+
+    def _on_toolbar_color_theme_changed(self, code: str):
+        # Backward-compatible path: change color while keeping Light/Dark mode.
+        if not code or code == self.settings.theme():
+            return
+        self.settings.set_theme(code)
+        self._apply_theme()
+        try:
+            from utils.constants import COLOR_THEMES
+            self.status_msg.setText(f"Color theme applied: {COLOR_THEMES.get(code, code)}")
+        except Exception:
+            pass
 
     def action_toggle_theme(self):
-        cur = self.settings.theme()
-        new = THEME_LIGHT if cur == THEME_DARK else THEME_DARK
-        self.settings.set_theme(new)
+        # Legacy shortcut/action: toggle Light/Dark quickly.
+        self.settings.set_appearance("dark" if self.settings.appearance() == "light" else "light")
         self._apply_theme()
 
     # ---- helpers ----
@@ -1054,7 +1817,7 @@ class MainWindow(QMainWindow):
     def _tab_changed(self, idx):
         t = self.current_tab()
         if t and t.document:
-            self.setWindowTitle(f"{t.document.file_name()} — {APP_NAME}")
+            self.setWindowTitle(APP_NAME)
             self._update_status()
             # Use UniqueConnection so each viewer is wired at most once.
             for sig, slot in (
@@ -1085,7 +1848,12 @@ class MainWindow(QMainWindow):
                 except (RuntimeError, TypeError):
                     pass
 
-            # Wire the per-tab All Tools panel signals
+            # Wire the per-tab All Tools panel signals once. Qt.UniqueConnection
+            # cannot be used reliably with lambdas, and repeating these
+            # connections can cause duplicated actions and sluggish UI.
+            if getattr(t, "_tools_panel_wired", False):
+                self._update_context_state()
+                return
             tp = t.tools_panel
             wires = (
                 (tp.undo_requested,           self.action_undo),
@@ -1124,7 +1892,15 @@ class MainWindow(QMainWindow):
                 (tp.to_images_requested,      self.action_export_images),
                 (tp.images_to_pdf_requested,  self.action_images_to_pdf),
                 (tp.to_text_requested,        self.action_extract_text),
+                (tp.pdf_to_word_requested,    self.action_pdf_to_word),
                 (tp.ocr_requested,            self.action_ocr),
+                (tp.zoom_in_requested,         lambda: self._with_tab(lambda t: t.viewer.zoom_in())),
+                (tp.zoom_out_requested,        lambda: self._with_tab(lambda t: t.viewer.zoom_out())),
+                (tp.fit_width_requested,       lambda: self._with_tab(lambda t: t.viewer.fit_width())),
+                (tp.fit_page_requested,        lambda: self._with_tab(lambda t: t.viewer.fit_page())),
+                (tp.view_mode_changed,         self._set_view_mode),
+                (tp.language_changed,          self._on_toolbar_language_changed),
+                (tp.app_theme_changed,         self._on_toolbar_app_theme_changed),
                 # NEW edit features
                 (tp.add_text_requested,            self.action_add_text_toggle),
                 (tp.add_image_requested,           self.action_add_image_toggle),
@@ -1136,11 +1912,14 @@ class MainWindow(QMainWindow):
             )
             for sig, slot in wires:
                 try:
-                    sig.connect(slot, Qt.UniqueConnection)
+                    sig.connect(slot)
                 except (RuntimeError, TypeError):
                     pass
+            t._tools_panel_wired = True
         else:
             self.setWindowTitle(APP_NAME)
+            self._leave_reading_auto_hide()
+        self._update_context_state()
 
     def _on_page_changed(self, page_num):
         t = self.current_tab()
@@ -1160,8 +1939,17 @@ class MainWindow(QMainWindow):
     def _on_zoom_changed(self, zoom):
         self.status_zoom.setText(f"Zoom {int(zoom * 100)}%")
         self.toolbar.set_zoom_label(zoom)
+        try:
+            t = self.current_tab()
+            if t and hasattr(t, "tools_panel"):
+                t.tools_panel.set_zoom_label(zoom)
+            if t and hasattr(t, "tools_sidebar"):
+                t.tools_sidebar.set_rail_zoom_label(f"{int(zoom * 100)}%")
+        except Exception:
+            pass
 
     def _update_status(self):
+        self._update_open_pdf_count_badge()
         t = self.current_tab()
         if not t or not t.document:
             self.status_page.setText("Page —")
@@ -1170,10 +1958,18 @@ class MainWindow(QMainWindow):
         self.status_page.setText(f"Page {t.viewer.canvas.current_page() + 1} / {t.document.page_count}")
         self.status_zoom.setText(f"Zoom {int(t.viewer.canvas.zoom * 100)}%")
         self.toolbar.set_zoom_label(t.viewer.canvas.zoom)
+        try:
+            if hasattr(t, "tools_panel"):
+                t.tools_panel.set_zoom_label(t.viewer.canvas.zoom)
+            if hasattr(t, "tools_sidebar"):
+                t.tools_sidebar.set_rail_zoom_label(f"{int(t.viewer.canvas.zoom * 100)}%")
+        except Exception:
+            pass
+        self._update_context_state()
 
     # ---- welcome tab ----
-    def _open_welcome_tab(self):
-        if self.tab_widget.count() > 0:
+    def _open_welcome_tab(self, force: bool = False):
+        if self.tab_widget.count() > 0 and not force:
             return
         from ui.home_page import HomePage
         import getpass
@@ -1199,10 +1995,13 @@ class MainWindow(QMainWindow):
             on_open_dialog=self.action_open,
             on_open_file=self.open_pdf,
             on_action=on_action,
-            is_dark=(self.settings.theme() == "dark"),
+            is_dark=(self.settings.appearance() == "dark"),
             parent=self,
         )
+        w._is_home_page = True
         self.tab_widget.addTab(w, "Home")
+        self.tab_widget.setCurrentWidget(w)
+        self._update_open_pdf_count_badge()
         if hasattr(self, "_apply_tab_close_icons"):
             self._apply_tab_close_icons()
 
@@ -1232,7 +2031,9 @@ class MainWindow(QMainWindow):
         self.tab_widget.setTabToolTip(idx, path)
         if hasattr(self, "_apply_tab_close_icons"):
             self._apply_tab_close_icons()
-        tab.viewer.set_background_color(viewer_background(self.settings.theme()))
+        self._update_open_pdf_count_badge()
+        tab.viewer.set_background_color(viewer_background(self.settings.theme(), self.settings.appearance()))
+        self._auto_hide_top_tools_for_pdf()
         self.settings.add_recent_file(path)
         self._rebuild_recent_menu()
         self._update_status()
@@ -1250,6 +2051,7 @@ class MainWindow(QMainWindow):
         if isinstance(w, PDFTab):
             w.close_document()
         self.tab_widget.removeTab(idx)
+        self._update_open_pdf_count_badge()
         if self.tab_widget.count() == 0:
             self._open_welcome_tab()
 
@@ -1453,6 +2255,12 @@ class MainWindow(QMainWindow):
         t = self.current_tab()
         if t:
             t.viewer.set_view_mode(mode)
+            # Automatically refit the PDF whenever page view changes
+            # (continuous / single page / two pages).  Queue the fit so it
+            # runs after the new layout is calculated, keeping the response
+            # smooth and avoiding a half-fitted page.
+            QTimer.singleShot(0, t.viewer.fit_width)
+            QTimer.singleShot(60, t.viewer.fit_width)
 
     def _toggle_fullscreen(self):
         if self.isFullScreen():
@@ -1465,36 +2273,64 @@ class MainWindow(QMainWindow):
         t = self.current_tab()
         if not t:
             return
-        wrap = {"tools": getattr(t, "tools_wrap", None),
-                "left": getattr(t, "left_wrap", None),
-                "right": getattr(t, "right_wrap", None)}.get(which)
-        if wrap:
-            wrap.toggle()
+        if which == "tools" and getattr(t, "tools_sidebar", None):
+            t.tools_sidebar.show_tools()
+        elif which == "left" and hasattr(t, "show_pages_panel"):
+            t.show_pages_panel()
+        elif which == "right" and hasattr(t, "show_comments_panel"):
+            t.show_comments_panel()
+        else:
+            if getattr(t, "tools_sidebar", None):
+                t.tools_sidebar.toggle()
 
     def _focus_mode(self):
-        """Collapse all three side panels for a distraction-free view.
-        If they're already all collapsed, expand them again."""
+        """Collapse/expand both fixed sidebars for distraction-free reading."""
         t = self.current_tab()
         if not t:
             return
-        wraps = [getattr(t, "tools_wrap", None),
-                 getattr(t, "left_wrap", None),
-                 getattr(t, "right_wrap", None)]
-        wraps = [w for w in wraps if w]
-        all_collapsed = all(w.is_collapsed() for w in wraps)
-        for w in wraps:
-            if all_collapsed:
-                w.expand()
-            else:
-                w.collapse()
-        self.status_msg.setText(
-            "Focus mode off." if all_collapsed
-            else "Focus mode: panels hidden (Ctrl+Shift+F to bring back).")
+        left = getattr(t, "tools_sidebar", None)
+        if not left:
+            return
+        right_visible = getattr(t, "right_info_panel", None) and t.right_info_panel.isVisible()
+        if left.is_collapsed() and not right_visible:
+            left.expand()
+            self.status_msg.setText("Focus mode off.")
+        else:
+            left.collapse()
+            if hasattr(t, "_hide_right_info_panel"):
+                t._hide_right_info_panel()
+            self.status_msg.setText("Focus mode: sidebars hidden (Ctrl+Shift+F to bring back).")
+
+    def eventFilter(self, obj, event):
+        """Keyboard polish for the PDF find box: Esc closes, Shift+Enter goes back."""
+        try:
+            from PySide6.QtCore import QEvent
+            if event.type() == QEvent.KeyPress:
+                t = self.current_tab()
+                if t and hasattr(t, "search_input") and obj is t.search_input:
+                    if event.key() == Qt.Key_Escape:
+                        t.hide_search_bar()
+                        return True
+                    if event.key() in (Qt.Key_Return, Qt.Key_Enter) and (event.modifiers() & Qt.ShiftModifier):
+                        t.search_prev()
+                        return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     # ---- search ----
+    def _focus_pdf_search(self):
+        t = self.current_tab()
+        if t and t.document:
+            t.show_search_bar()
+            self.status_msg.setText("Search is open. Type text, Enter = next, Shift+Enter = previous, Esc = close.")
+        else:
+            self.status_msg.setText("Open a PDF first to search text.")
+
     def _search(self, term):
         t = self.current_tab()
         if t:
+            t.show_search_bar()
             t.search(term)
 
     # ---- annotation actions (hints) ----
@@ -1520,32 +2356,62 @@ class MainWindow(QMainWindow):
             "Highlight tool: drag across text to highlight. Click again to stop.")
 
     def _on_highlight_selected(self, page_index, rect):
-        """Called when the user finishes a drag on the highlight tool."""
+        """Called when the user finishes a drag on the highlight tool.
+
+        The new behavior follows the text's reading order from drag-start word
+        to drag-end word, so highlighting feels like using a real marker pen.
+        It no longer treats the drag as a big box that catches unrelated text.
+        """
         t = self.current_tab()
         if not t or not t.document:
             return
         try:
             t.document.push_undo("Highlight")
             color = self.settings.highlight_color()
-            # snap to words inside the rect for nicer text highlights
-            try:
-                word_rects = t.document.doc[page_index].get_text("words")
-                # each word: (x0, y0, x1, y1, "word", block, line, word)
-                import fitz
-                sel = fitz.Rect(rect.x(), rect.y(),
-                                rect.x() + rect.width(),
-                                rect.y() + rect.height())
-                hit_rects = []
-                for w in word_rects:
+            import fitz
+
+            payload = rect if isinstance(rect, dict) else {"rect": rect}
+            base_rect = payload.get("rect")
+            start = payload.get("start")
+            end = payload.get("end")
+
+            def fallback_rects():
+                sel = fitz.Rect(base_rect.x(), base_rect.y(),
+                                base_rect.x() + base_rect.width(),
+                                base_rect.y() + base_rect.height())
+                hits = []
+                for w in t.document.doc[page_index].get_text("words") or []:
                     wr = fitz.Rect(w[0], w[1], w[2], w[3])
                     if wr.intersects(sel):
-                        hit_rects.append(wr)
+                        hits.append(wr)
+                return hits or [sel]
+
+            hit_rects = []
+            try:
+                words = list(t.document.doc[page_index].get_text("words") or [])
+                if start and end and words:
+                    words.sort(key=lambda w: (int(w[5]), int(w[6]), int(w[7]), float(w[1]), float(w[0])))
+                    sp = fitz.Point(float(start[0]), float(start[1]))
+                    ep = fitz.Point(float(end[0]), float(end[1]))
+
+                    def score(pt, w):
+                        wr = fitz.Rect(w[0], w[1], w[2], w[3])
+                        if wr.contains(pt):
+                            return -1.0
+                        cx = (wr.x0 + wr.x1) / 2.0
+                        cy = (wr.y0 + wr.y1) / 2.0
+                        return (cx - pt.x) * (cx - pt.x) + (cy - pt.y) * (cy - pt.y)
+
+                    i0 = min(range(len(words)), key=lambda i: score(sp, words[i]))
+                    i1 = min(range(len(words)), key=lambda i: score(ep, words[i]))
+                    if i0 > i1:
+                        i0, i1 = i1, i0
+                    hit_rects = [fitz.Rect(w[0], w[1], w[2], w[3])
+                                 for w in words[i0:i1 + 1]]
                 if not hit_rects:
-                    hit_rects = [sel]
+                    hit_rects = fallback_rects()
             except Exception:
-                hit_rects = [(rect.x(), rect.y(),
-                              rect.x() + rect.width(),
-                              rect.y() + rect.height())]
+                hit_rects = fallback_rects()
 
             style = getattr(t, "_highlight_style", "highlight")
             if style == "underline":
@@ -1755,6 +2621,33 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Extract text failed", str(e))
 
+    def action_pdf_to_word(self):
+        t = self.current_tab()
+        if not t or not t.path:
+            QMessageBox.information(self, "PDF to Word", "Open and save a PDF first.")
+            return
+        default_name = os.path.splitext(os.path.basename(t.path))[0] + ".docx"
+        out, _ = QFileDialog.getSaveFileName(
+            self, "Save Word document as…", default_name, "Word Document (*.docx)"
+        )
+        if not out:
+            return
+        if not out.lower().endswith(".docx"):
+            out += ".docx"
+
+        worker = PdfToWordWorker(t.path, out)
+
+        def _done(path):
+            self.status_msg.setText(f"Word document saved: {path}")
+            QMessageBox.information(
+                self,
+                "PDF to Word complete",
+                "Saved Word document:\n" + path +
+                "\n\nNote: scanned PDFs need OCR first before Word can contain editable text."
+            )
+
+        self._run_worker(worker, "Converting PDF to Word…", _done)
+
     # ---- OCR ----
     def action_ocr(self):
         t = self.current_tab()
@@ -1939,7 +2832,9 @@ class MainWindow(QMainWindow):
         dlg = CompressDialog(size, self)
         if dlg.exec() != CompressDialog.Accepted:
             return
-        dpi, quality = dlg.settings()
+        comp_options = dlg.settings()
+        dpi = int(comp_options.get("target_dpi", 100))
+        quality = int(comp_options.get("jpeg_quality", 70))
         out, _ = QFileDialog.getSaveFileName(
             self, "Save compressed PDF as",
             os.path.splitext(t.path)[0] + f"-compressed-{dpi}dpi.pdf",
@@ -1949,7 +2844,7 @@ class MainWindow(QMainWindow):
         if not out.lower().endswith(".pdf"):
             out += ".pdf"
 
-        worker = CompressWorker(t.path, out, dpi, quality)
+        worker = CompressWorker(t.path, out, dpi, quality, options=comp_options)
 
         def on_done(path):
             stats = worker.stats or {}
@@ -2010,6 +2905,7 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel("Found in this document (you can copy or save):"))
         box = QTextEdit()
+        box.setObjectName("ReportText")
         box.setPlainText(report)
         box.setReadOnly(True)
         lay.addWidget(box, 1)
@@ -2786,6 +3682,7 @@ class MainWindow(QMainWindow):
             + f"\n\nTotal: {len(self.library.all_papers())} papers.")
         if self._library_panel is not None:
             self._library_panel.refresh_all()
+        self._update_context_state()
 
     def _jump_to_note(self, entry):
         """One-click jump back to where a saved snippet came from."""
@@ -2884,7 +3781,9 @@ class MainWindow(QMainWindow):
                  line_rect.y() + line_rect.height()),
                 new_text, color_hex="#000000")
             t.viewer.canvas.invalidate_page(page_index)
+            t.viewer.canvas.invalidate_line_cache(page_index)
             t.viewer.canvas.update()
+            self._refresh_undo_state()
             self.status_msg.setText(
                 "Edited (unsaved). Keep clicking lines, or press the button "
                 "again to finish.")
@@ -2942,7 +3841,9 @@ class MainWindow(QMainWindow):
                 self.status_msg.setText("No text found on that line to color.")
                 return
             t.viewer.canvas.invalidate_page(page_index)
+            t.viewer.canvas.invalidate_line_cache(page_index)
             t.viewer.canvas.update()
+            self._refresh_undo_state()
             self.status_msg.setText(
                 f"Line colored on page {page_index + 1} (unsaved). "
                 "Click another line, or stop the tool.")
@@ -3032,17 +3933,12 @@ class MainWindow(QMainWindow):
         # document (this is what kept shrinking headings to body size).
         font_size = info["size"] if info else None
 
-        # If the clicked line is part of a multi-line block (e.g. a heading
-        # that wraps onto 2+ lines), edit the WHOLE block as one unit — erase
-        # all of it and replace — so we don't leave leftover old text under
-        # the new text. Use the block's bbox and the block's full text.
+        # Edit only the clicked visual line. The previous version sometimes
+        # expanded a click into the whole text block. That looked messy on
+        # research papers because a heading/paragraph block could cover two or
+        # more lines, leaving a large white patch.
         edit_rect = line_rect
         prefill = line_text
-        if info and info.get("is_multiline") and info.get("block_bbox"):
-            from PySide6.QtCore import QRectF
-            bx0, by0, bx1, by1 = info["block_bbox"]
-            edit_rect = QRectF(bx0, by0, bx1 - bx0, by1 - by0)
-            prefill = info.get("block_text", line_text)
 
         dlg = EditLineDialog(prefill, page_index, font_hint,
                              font_size or 11.0, self)
@@ -3063,9 +3959,12 @@ class MainWindow(QMainWindow):
                 font_hint=font_hint,
                 color_hex=dlg.color_hex(),
             )
-            # refresh the page so the change shows immediately
+            # refresh the page so the change shows immediately, and rebuild
+            # line hit-testing so the next edit uses the new text/bounding box.
             t.viewer.canvas.invalidate_page(page_index)
+            t.viewer.canvas.invalidate_line_cache(page_index)
             t.viewer.canvas.update()
+            self._refresh_undo_state()
             self.status_msg.setText(
                 "Line edited. (Save when you close, or press Ctrl+S.)")
         except Exception as e:
@@ -3380,22 +4279,46 @@ class MainWindow(QMainWindow):
 
     # ---- settings ----
     def _on_toolbar_language_changed(self, code):
-        """User picked a language from the top-bar selector."""
-        from utils.i18n import set_language, current_language
+        """Apply the selected interface language immediately.
+
+        Older builds showed a restart popup. That felt confusing, so this now
+        updates the active top-level UI live: menus, toolbar language selector,
+        layout direction, and status message. New dialogs also open in the
+        selected language.
+        """
+        from utils.i18n import set_language, current_language, is_rtl
         if not code or code == current_language():
             return
         self.settings.set_ui_language(code)
         set_language(code)
-        # Rebuild the menus right away so the change is visible immediately.
+        try:
+            QApplication.instance().setLayoutDirection(
+                Qt.RightToLeft if is_rtl() else Qt.LeftToRight)
+        except Exception:
+            pass
         try:
             self.menuBar().clear()
             self._build_menus()
         except Exception:
             pass
-        QMessageBox.information(
-            self, tr("Language changed"),
-            tr("The interface language will fully apply after you "
-               "restart the app."))
+        try:
+            self.toolbar.refresh_language_selector()
+            t = self.current_tab()
+            if t and hasattr(t, "tools_panel"):
+                t.tools_panel.refresh_language_selector()
+            if getattr(self, "compact_lang", None) is not None:
+                self.compact_lang.blockSignals(True)
+                for i in range(self.compact_lang.count()):
+                    if self.compact_lang.itemData(i) == code:
+                        self.compact_lang.setCurrentIndex(i)
+                        break
+                self.compact_lang.blockSignals(False)
+        except Exception:
+            pass
+        try:
+            self.status_msg.setText(tr("Language applied automatically."))
+        except Exception:
+            pass
 
     def action_settings(self):
         from utils.i18n import current_language, set_language
@@ -3411,28 +4334,19 @@ class MainWindow(QMainWindow):
                 tab = self.tab_widget.widget(i)
                 if hasattr(tab, "viewer") and tab.viewer:
                     tab.viewer.set_render_dpi(new_dpi)
-            # Interface language changed? Rebuild the menus live and tell the
-            # user a restart will refresh anything still in the old language.
+            # Interface language changed? Apply it immediately without a
+            # restart popup. New dialogs will also use the selected language.
             lang_after = self.settings.ui_language()
             if lang_after != lang_before:
-                set_language(lang_after)
-                try:
-                    self.menuBar().clear()
-                    self._build_menus()
-                except Exception:
-                    pass
-                QMessageBox.information(
-                    self, tr("Language changed"),
-                    tr("The interface language will fully apply after you "
-                       "restart the app."))
+                self._on_toolbar_language_changed(lang_after)
 
     # ---- about ----
     def action_check_updates(self, manual=False):
-        """Check GitHub for a newer version.
+        """Check GitHub Releases for a newer version.
 
-        manual=True means the user clicked Help > Check for updates, so we
-        also tell them when they're already up to date. On the automatic
-        startup check we only speak up if there IS an update.
+        Automatic startup check: silent if no update or internet problem, but
+        shows the update popup every time the app opens when a newer release
+        exists. The user can choose Update now or Later.
         """
         try:
             from utils.updater import check_for_update
@@ -3449,85 +4363,116 @@ class MainWindow(QMainWindow):
             if manual:
                 QMessageBox.information(
                     self, "Check for updates",
-                    "Could not check right now.\nPlease make sure you have "
-                    "an internet connection and try again.")
+                    "Could not check right now. Please check your internet "
+                    "connection and make sure the GitHub repository is correct.")
             return
 
-        if result["update"]:
+        if result.get("update"):
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Information)
             box.setWindowTitle("Update available")
+            asset = result.get("asset_name") or "latest release package"
             box.setText(
                 f"A new version of {APP_NAME} is available.\n\n"
-                f"You have: {result['current']}\n"
-                f"Latest:   {result['latest']}\n\n"
-                "Download and install it now?")
-            box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-            box.button(QMessageBox.Yes).setText("Download && Install")
-            box.button(QMessageBox.No).setText("Later")
-            if box.exec() == QMessageBox.Yes:
-                self._download_and_install_update(result)
+                f"Current version: {result.get('current')}\n"
+                f"Latest version:  {result.get('latest')}\n\n"
+                f"Package: {asset}\n\n"
+                "Do you want to download and install the update now?"
+            )
+            if not result.get("asset_url"):
+                box.setInformativeText(
+                    "Automatic install needs a .zip asset in the GitHub release. "
+                    "I can open the release page for manual download."
+                )
+            update_now = box.addButton("Update now", QMessageBox.AcceptRole)
+            later = box.addButton("Later", QMessageBox.RejectRole)
+            release_page = box.addButton("Open release page", QMessageBox.HelpRole)
+            box.setDefaultButton(update_now)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked == update_now:
+                if result.get("asset_url"):
+                    self._download_and_install_update(result)
+                else:
+                    QDesktopServices.openUrl(QUrl(result.get("url", "")))
+            elif clicked == release_page:
+                QDesktopServices.openUrl(QUrl(result.get("url", "")))
+            else:
+                # No suppression is saved. Because you requested it, the same
+                # update will be shown again the next time the app opens.
+                return
         elif manual:
             QMessageBox.information(
                 self, "Check for updates",
-                f"You are using the latest version ({result['current']}).")
+                f"You are using the latest version ({result.get('current')}).")
 
     def _download_and_install_update(self, result):
-        """Launch the SEPARATE updater process, then close this app.
+        """Start the separate updater, close this app, and reopen after update.
 
-        The updater runs on its own (while the app is closed, so files aren't
-        locked), downloads the new version, installs it over this one, and
-        restarts the app. This is the safe way to self-update.
+        Works for both source/Python installs and PyInstaller onedir exe builds.
+        For exe builds, developer/build-exe.bat creates UpdaterRunner.exe and
+        copies it into the same app folder.
         """
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
         import os, sys, subprocess
 
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        updater = os.path.join(base, "updater_runner.py")
-        main_py = os.path.join(base, "main.py")
-        python_exe = sys.executable  # the python/pythonw running us
-        # The updater should run with the CONSOLE python (python.exe), not the
-        # windowless pythonw.exe, so it can actually run and show progress.
-        if os.name == "nt" and python_exe.lower().endswith("pythonw.exe"):
-            cand = python_exe[:-len("pythonw.exe")] + "python.exe"
-            if os.path.exists(cand):
-                python_exe = cand
+        frozen = bool(getattr(sys, "frozen", False))
+        if frozen:
+            base = os.path.dirname(os.path.abspath(sys.executable))
+            updater_exe = os.path.join(base, "UpdaterRunner.exe")
+            relaunch_exe = sys.executable
+            main_py = ""
+            if not os.path.exists(updater_exe):
+                QMessageBox.warning(
+                    self, "Updater missing",
+                    "UpdaterRunner.exe is missing from the app folder.\n\n"
+                    "Please rebuild the app with developer\\build-exe.bat, "
+                    "or download the update manually from GitHub."
+                )
+                QDesktopServices.openUrl(QUrl(result.get("url", "")))
+                return
+            command = [updater_exe, base, relaunch_exe, main_py, result.get("asset_url", "")]
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            updater_py = os.path.join(base, "updater_runner.py")
+            main_py = os.path.join(base, "main.py")
+            python_exe = sys.executable
+            if os.name == "nt" and python_exe.lower().endswith("pythonw.exe"):
+                cand = python_exe[:-len("pythonw.exe")] + "python.exe"
+                if os.path.exists(cand):
+                    python_exe = cand
+            if not os.path.exists(updater_py):
+                QMessageBox.warning(
+                    self, "Updater missing",
+                    "updater_runner.py is missing. Opening the GitHub release page instead."
+                )
+                QDesktopServices.openUrl(QUrl(result.get("url", "")))
+                return
+            command = [python_exe, updater_py, base, sys.executable, main_py, result.get("asset_url", "")]
 
-        if not os.path.exists(updater):
-            # no updater script — fall back to opening the download page
-            QDesktopServices.openUrl(QUrl(result["url"]))
-            return
-
-        # tell the user what's about to happen
         QMessageBox.information(
             self, "Updating",
             f"{APP_NAME} will now close and update itself to version "
-            f"{result['latest']}.\n\n"
-            "It will reopen automatically when the update is done. "
-            "Please wait a moment.")
+            f"{result.get('latest')}.\n\n"
+            "The updater will download the GitHub release, install it, "
+            "and reopen the app automatically. Please wait."
+        )
 
         try:
-            # start the updater as an independent process so it keeps running
-            # after we exit
             kwargs = {}
             if os.name == "nt":
-                # CREATE_NEW_CONSOLE so the updater shows its own window with
-                # progress, and survives this app closing.
                 kwargs["creationflags"] = 0x00000010  # CREATE_NEW_CONSOLE
-            # relaunch with pythonw if available so the restarted app has no console
-            relaunch_exe = sys.executable
-            subprocess.Popen([python_exe, updater, base, relaunch_exe, main_py],
-                             **kwargs)
+            subprocess.Popen(command, **kwargs)
         except Exception as e:
             QMessageBox.warning(
                 self, "Update failed to start",
                 f"Could not start the updater: {e}\n\n"
-                "Opening the download page instead.")
-            QDesktopServices.openUrl(QUrl(result["url"]))
+                "Opening the GitHub release page instead."
+            )
+            QDesktopServices.openUrl(QUrl(result.get("url", "")))
             return
 
-        # close the app so the updater can replace files
         QApplication.quit()
 
     def action_about(self):

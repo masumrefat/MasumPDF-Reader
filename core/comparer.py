@@ -564,7 +564,7 @@ def generate_compare_report(old_path: str,
     cover.insert_text((50, 96), "PDF Comparison Report",
                       fontname="hebo", fontsize=22, color=BRAND)
     cover.insert_text((50, 118),
-                      f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                      f"Created {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                       + (f"   \u00b7   {author}" if author else ""),
                       fontname="helv", fontsize=9, color=(0.45, 0.45, 0.45))
     cover.draw_line(fitz.Point(50, 132), fitz.Point(A4_W - 50, 132),

@@ -27,12 +27,12 @@ class NotesPanel(QDialog):
         top.addWidget(title)
         top.addStretch(1)
         self.count_lbl = QLabel("")
-        self.count_lbl.setStyleSheet("color:#666;")
+        self.count_lbl.setObjectName("LogCount")
         top.addWidget(self.count_lbl)
         lay.addLayout(top)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("\U0001F50D  Search your notes (text, title, author, page…)")
+        self.search.setPlaceholderText("Search your notes (text, title, author, page…)")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh)
         lay.addWidget(self.search)
@@ -57,7 +57,8 @@ class NotesPanel(QDialog):
 
         hint = QLabel("Double-click a row to see the full text. "
                       "Select a row and click 'Jump to source' to go back to it.")
-        hint.setStyleSheet("color:#888; font-size: 11px;")
+        hint.setObjectName("LogHint")
+        hint.setStyleSheet("font-size: 11px;")
         lay.addWidget(hint)
 
         brow = QHBoxLayout()

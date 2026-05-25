@@ -1,7 +1,7 @@
 """Constants used across the MasumPDF Reader app."""
 
 APP_NAME = "MasumPDF Reader"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 # GitHub repo used to check for newer versions (owner/repo).
 # Change this if your repository name is different.
 GITHUB_REPO = "masumrefat/MasumPDF-Reader"
@@ -44,10 +44,34 @@ VIEW_SINGLE = "single"
 VIEW_CONTINUOUS = "continuous"
 VIEW_TWO_PAGE = "two_page"
 
-# Themes
+# Theme system
+# Appearance controls the full surface (Light/Dark). Accent controls the whole
+# GUI color family: toolbar highlights, selected tabs, cards, buttons, borders,
+# focus rings, progress bars, and side-rail restore buttons.
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
-THEME_SYSTEM = "system"
+THEME_SYSTEM = "light"
+APPEARANCES = {
+    THEME_LIGHT: "Light mode",
+    THEME_DARK: "Dark mode",
+}
+DEFAULT_APPEARANCE = THEME_LIGHT
+
+THEME_BLUE = "blue"
+THEME_GREEN = "green"
+THEME_PURPLE = "purple"
+THEME_ORANGE = "orange"
+THEME_ROSE = "rose"
+THEME_GRAPHITE = "graphite"
+COLOR_THEMES = {
+    THEME_BLUE: "Ocean Blue",
+    THEME_GREEN: "Research Green",
+    THEME_PURPLE: "Royal Purple",
+    THEME_ORANGE: "Warm Orange",
+    THEME_ROSE: "Rose Pink",
+    THEME_GRAPHITE: "Graphite",
+}
+DEFAULT_COLOR_THEME = THEME_BLUE
 
 # History
 RECENT_FILES_MAX = 12

@@ -7,7 +7,8 @@ from PySide6.QtCore import QSettings
 from .constants import (
     APP_NAME, APP_ORG, RECENT_FILES_MAX,
     DEFAULT_HIGHLIGHT_COLOR, DEFAULT_PEN_COLOR, DEFAULT_PEN_WIDTH,
-    THEME_LIGHT, VIEW_CONTINUOUS,
+    THEME_LIGHT, THEME_DARK, VIEW_CONTINUOUS, COLOR_THEMES, DEFAULT_COLOR_THEME,
+    DEFAULT_APPEARANCE, APPEARANCES,
 )
 
 
@@ -36,10 +37,51 @@ class AppSettings:
 
     # ----- theme -----
     def theme(self) -> str:
-        return self.get("theme", THEME_LIGHT)
+        """Return the accent color code.
+
+        Older builds stored "light" or "dark" in this key. Those values are now
+        treated as appearance and the accent falls back to blue.
+        """
+        theme = str(self.get("theme", DEFAULT_COLOR_THEME) or DEFAULT_COLOR_THEME)
+        if theme in (THEME_LIGHT, THEME_DARK, "system"):
+            return DEFAULT_COLOR_THEME
+        return theme if theme in COLOR_THEMES else DEFAULT_COLOR_THEME
 
     def set_theme(self, theme: str):
+        if theme in (THEME_LIGHT, THEME_DARK):
+            self.set_appearance(theme)
+            theme = self.theme()
+        if theme == "system":
+            theme = DEFAULT_COLOR_THEME
+        if theme not in COLOR_THEMES:
+            theme = DEFAULT_COLOR_THEME
         self.set("theme", theme)
+
+    def color_theme(self) -> str:
+        return self.theme()
+
+    def set_color_theme(self, theme: str):
+        self.set_theme(theme)
+
+    def appearance(self) -> str:
+        # Prefer the new key. If an older install still has "theme=dark" or
+        # "theme=light", convert that to the new appearance model.
+        appearance = str(self.get("appearance", "") or "")
+        if appearance in APPEARANCES:
+            return appearance
+        old_theme = str(self.get("theme", "") or "")
+        if old_theme in (THEME_LIGHT, THEME_DARK):
+            return old_theme
+        return DEFAULT_APPEARANCE
+
+    def set_appearance(self, appearance: str):
+        if appearance not in APPEARANCES:
+            appearance = DEFAULT_APPEARANCE
+        self.set("appearance", appearance)
+
+    def set_app_theme(self, appearance: str, color_theme: str):
+        self.set_appearance(appearance)
+        self.set_color_theme(color_theme)
 
     # ----- zoom -----
     def default_zoom(self) -> float:

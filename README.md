@@ -12,86 +12,102 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platforms">
+  <img src="https://img.shields.io/badge/version-V1.0.2-blue" alt="Version V1.0.2">
 </p>
 
 ---
 
-## Download & Install (Windows)
+## Why I made this
 
-1. Go to the **[Releases](../../releases)** page (right side of this repo).
-2. Download **`MasumPDF-Reader-Setup.exe`** from the latest release.
-3. Run it and follow the simple install wizard.
+A good PDF reader is very important in student life, especially for research
+work and LaTeX use. Most of the full features for managing PDF files are only
+available in paid PDF readers, which are very expensive. Free PDF readers
+usually don't have all these functions. So I made a free, open-source PDF
+reader that lets you manage PDF files like the paid ones do.
 
-That's it. The installer puts a **MasumPDF Reader** icon on your Desktop.
+I'm a student and built this for my own research and LaTeX work. The full
+source code is in this repository — you can read it, build it yourself, or
+run it from source (see below).
 
-> ⏱️ **Please be patient — the first install takes about 15–20 minutes**
-> (depending on your internet speed). It downloads around **800 MB** of
-> components the first time. This is normal — leave it running and let it
-> finish. It only happens once; after that the app opens instantly. You need
-> an internet connection during the install.
+## Run from source (see the code yourself)
 
+This is open source. All the code is here in the `core/`, `ui/`, and `utils/`
+folders. To run it directly from the source:
 
+```bash
+git clone https://github.com/masumrefat/MasumPDF-Reader.git
+cd MasumPDF-Reader
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS / Linux:
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
 
-## About
+> The first `pip install` downloads the components (PySide6, PyMuPDF, etc.)
+> and can take several minutes.
 
-MasumPDF Reader is a desktop application for working with PDF files. You can
-read, edit, annotate, sign, organize, convert, OCR, compare, compress, fill
-forms, and protect PDFs — all from one window. It is written in Python with
-PySide6 (Qt) and PyMuPDF.
+## Download the installer (Windows)
 
-This project was created by **Chowdhury Mohammad Masum Refat** and is released
-under the MIT License. It is intended for education purposes.
+If you just want to use the app without setting up Python yourself, download
+the installer from the [Releases](../../releases) page and run it. The
+installer is built from the exact source code in this repository — you can
+verify it by building it yourself with the script in `developer/installer.iss`.
+
+> Because the app is new and not code-signed, Windows may show a
+> "Windows protected your PC" notice. Click **More info → Run anyway**.
+> This is normal for small open-source apps.
 
 ## Features
 
-- **Read & view** — continuous, single, and two-page modes; zoom, rotate, fit, fullscreen; dark and light themes
+- **Read & view** — tabs, dark/light mode, zoom, rotate, fit, fullscreen
 - **Search** the full document
+- **Edit Mode** — click any line of text and type to change it
+- **Edit** — add text, insert images, color a line, headers & footers
 - **Annotate** — highlight, sticky notes, comments, stamps
-- **Edit** — Edit Mode (click any line and type), add text, insert images, color a line, change text color, headers & footers
-- **Undo & erase** — undo any edit (Ctrl+Z) or click to delete a single annotation
+- **Undo & erase** — undo edits (Ctrl+Z); click to delete a single annotation
 - **Organize pages** — merge, split, extract, rotate, insert, delete
-- **Sign & forms** — place signatures, prepare and fill form fields
-- **Compare two PDFs** — word-level, reflow-aware comparison with a color-coded report:
-  - 🟩 green = added &nbsp; 🟥 red = removed &nbsp; 🟦 blue = moved (reflow)
-  - detects figure / image changes (dashed orange box)
-  - downloadable PDF report with bookmarks and "jump to changes"
+- **Sign & forms** — place signatures, fill form fields
+- **Compare two PDFs** — word-level report (added = green, removed = red,
+  moved = blue, changed figures flagged); downloadable PDF report
 - **Convert** — PDF ↔ images, PDF → text, PDF → DOCX, OCR scanned PDFs
 - **Compress, encrypt/decrypt, edit metadata**
-- **Print** with a custom print dialog (page range, copies, grayscale, live preview)
-- **Clickable links** — table-of-contents and web links work inside the page
-- **Check for updates** — the app checks this GitHub page for new versions
-
-## Uninstall
-
-Open **Windows Settings → Apps**, find **MasumPDF Reader**, and click
-**Uninstall**. (Python is left in place since other programs may use it.)
-
-If Windows shows a blue "Windows protected your PC" box (because the app is new and not signed), click More info → Run anyway. This is normal for small open-source apps.
+- **Print** with a custom dialog (page range, copies, grayscale, live preview)
 
 ## Built with
 
 - [PySide6](https://doc.qt.io/qtforpython/) — the Qt GUI framework
 - [PyMuPDF](https://pymupdf.readthedocs.io/) — PDF rendering and editing
-- [Pillow](https://python-pillow.org/), [NumPy](https://numpy.org/) — image handling and comparison
+- [Pillow](https://python-pillow.org/), [NumPy](https://numpy.org/) — images and comparison
 - [pypdf](https://pypdf.readthedocs.io/), [reportlab](https://www.reportlab.com/) — PDF utilities
+
+## Project layout
+
+```
+MasumPDF-Reader/
+├── main.py              # app entry point + splash screen
+├── launcher.py          # helper to start the app
+├── requirements.txt     # Python packages
+├── core/                # PDF engine (rendering, editing, comparison, OCR…)
+├── ui/                  # windows, dialogs, viewer, toolbar, panels
+├── utils/               # constants, settings, update check, helpers
+├── resources/           # icons and themes
+└── developer/           # build scripts, including the Inno Setup installer
+```
 
 ## Honest notes
 
-- This is a student / education project, not a commercial product. It does its
-  job well, but it is smaller in scope than paid tools and may have rough edges.
-- **First install is slow** (about 15–20 minutes, ~800 MB download) because it
-  fetches all the components. This is one-time only.
-- **Editing existing text** keeps the original font for standard fonts
-  (Times, Helvetica, etc.). For unusual embedded fonts, it uses the closest
-  matching font, so it may not be pixel-identical — the same limit other PDF
-  editors have.
-- The PDF comparison is **text-and-figure based**. It catches text changes
-  precisely and flags changed figures, but it is not pixel-perfect on every
-  scanned or image-only document.
-- Scanned PDFs should be run through OCR first for best comparison results.
-- The author name and license are checked at startup; the app is meant to be
-  used and shared with credit kept intact.
+- This is a student / education project, not a commercial product. It works
+  well but is smaller in scope than paid tools and may have rough edges.
+- Editing existing text keeps the original font for standard fonts (Times,
+  Helvetica, etc.). For unusual embedded fonts it uses the closest match, so
+  it may not be pixel-identical — the same limit other PDF editors have.
+- The comparison is text-and-figure based; run scanned PDFs through OCR first
+  for best results.
+- First setup downloads the components and takes a few minutes (one time only).
 
 ## License
 

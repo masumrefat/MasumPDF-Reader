@@ -9,6 +9,7 @@ sign placement.
 from PySide6.QtWidgets import (
     QWidget, QScrollArea, QSizePolicy, QApplication,
 )
+from pathlib import Path
 from PySide6.QtCore import Qt, QSize, QRect, Signal, QPoint, QRectF, QPointF
 from PySide6.QtGui import (
     QPainter, QColor, QPixmap, QFont, QPen, QBrush, QCursor,
@@ -91,6 +92,13 @@ class PDFCanvas(QWidget):
         self._page_rects: list[QRect] = []
         self._current_page = 0
         self._background = QColor("#D8D8DE")
+        # Premium translucent GUI background requested by the user.
+        # It is drawn behind PDF pages at 60% opacity and scaled to cover
+        # the full canvas, while the page itself remains clean white.
+        self._background_image_opacity = 0.60
+        self._background_pixmap = QPixmap(str(
+            Path(__file__).resolve().parents[1] / "resources" / "backgrounds" / "gui_background.png"
+        ))
         self._search_highlights: dict[int, list] = {}
         self._active_search_hit = None
 
@@ -143,9 +151,17 @@ class PDFCanvas(QWidget):
         w, h = self.pdf.page_size(self._current_page)
         if self.rotation in (90, 270):
             w, h = h, w
-        pad = 40
+        pad = 44
         avail = max(100, viewport_w - pad)
-        new_zoom = avail / (w * self.render_dpi / 72.0)
+        # In two-page mode, Fit Width must keep TWO pages visible side by side.
+        # Before this fix it fit one page to the full viewport, so the second
+        # page disappeared horizontally.
+        if self.view_mode == VIEW_TWO_PAGE and self.pdf.page_count > 1:
+            gap = self.PAGE_SPACING
+            base_pair_width = (w * 2.0) * (self.render_dpi / 72.0)
+            new_zoom = max(0.05, (avail - gap) / base_pair_width)
+        else:
+            new_zoom = avail / (w * self.render_dpi / 72.0)
         self.set_zoom(new_zoom)
 
     def fit_page(self, vw, vh):
@@ -385,13 +401,78 @@ class PDFCanvas(QWidget):
                 return p
         return -1
 
+
+    def _selected_word_rects_for_drag(self, page_index: int, start_pt: QPointF, end_pt: QPointF):
+        """Return word rectangles in natural reading order between two drag points.
+
+        This makes Highlight feel like normal text marking instead of a box
+        selection.  A rectangular fallback is kept for scanned/odd PDFs.
+        """
+        if not self.pdf or not self.pdf.doc or page_index < 0:
+            return []
+        try:
+            import fitz
+            page = self.pdf.doc[page_index]
+            words = list(page.get_text("words") or [])
+            if not words:
+                return []
+            words.sort(key=lambda w: (int(w[5]), int(w[6]), int(w[7]), float(w[1]), float(w[0])))
+
+            def score(pt, w):
+                r = fitz.Rect(w[0], w[1], w[2], w[3])
+                px, py = float(pt.x()), float(pt.y())
+                if r.contains(fitz.Point(px, py)):
+                    return -1.0
+                cx = (r.x0 + r.x1) / 2.0
+                cy = (r.y0 + r.y1) / 2.0
+                return (cx - px) * (cx - px) + (cy - py) * (cy - py)
+
+            i0 = min(range(len(words)), key=lambda i: score(start_pt, words[i]))
+            i1 = min(range(len(words)), key=lambda i: score(end_pt, words[i]))
+            if i0 > i1:
+                i0, i1 = i1, i0
+            selected = words[i0:i1 + 1]
+            return [fitz.Rect(w[0], w[1], w[2], w[3]) for w in selected]
+        except Exception:
+            return []
+
+    def _paint_background(self, painter: QPainter):
+        """Paint the app background image with 60% opacity behind PDF pages.
+
+        Important: do not cache a scaled pixmap for the full PDF canvas.
+        Long PDFs can make the canvas extremely tall, and caching a huge
+        background pixmap can freeze the app or consume too much memory.
+        Drawing from the original pixmap lets Qt clip to the visible area.
+        """
+        painter.fillRect(self.rect(), self._background)
+        if self._background_pixmap.isNull():
+            return
+
+        target = self.rect()
+        if target.isEmpty():
+            return
+
+        # Scale like CSS background-size: cover so there are no empty bands.
+        src_w = max(1, self._background_pixmap.width())
+        src_h = max(1, self._background_pixmap.height())
+        scale = max(target.width() / src_w, target.height() / src_h)
+        draw_w = int(src_w * scale)
+        draw_h = int(src_h * scale)
+        x = target.x() + (target.width() - draw_w) // 2
+        y = target.y() + (target.height() - draw_h) // 2
+
+        painter.save()
+        painter.setOpacity(self._background_image_opacity)
+        painter.drawPixmap(x, y, draw_w, draw_h, self._background_pixmap)
+        painter.restore()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         # These render hints make page pixmaps look sharp instead of jagged
         # when Qt needs to scale them (which it always does on hi-DPI screens).
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.fillRect(self.rect(), self._background)
+        self._paint_background(painter)
 
         if not self.pdf or self.pdf.page_count == 0:
             cx = self.rect().center().x()
@@ -452,14 +533,29 @@ class PDFCanvas(QWidget):
             x1 = r.left() + max(self._drag_start_pdf.x(), self._drag_current_pdf.x()) * scale
             y1 = r.top() + max(self._drag_start_pdf.y(), self._drag_current_pdf.y()) * scale
             if self._tool == TOOL_HIGHLIGHT:
-                fill, pen = QColor(255, 235, 59, 110), QColor(180, 140, 0)
+                # Premium text-marker preview: paint the actual words between
+                # drag start and drag end.  No dashed rectangle / box outline.
+                marker_color = QColor(255, 235, 59, 105)
+                word_rects = self._selected_word_rects_for_drag(
+                    self._drag_start_page, self._drag_start_pdf, self._drag_current_pdf)
+                if word_rects:
+                    for wr in word_rects:
+                        wx0 = r.left() + wr.x0 * scale
+                        wy0 = r.top() + wr.y0 * scale
+                        wx1 = r.left() + wr.x1 * scale
+                        wy1 = r.top() + wr.y1 * scale
+                        painter.fillRect(QRectF(wx0, wy0, wx1 - wx0, wy1 - wy0), marker_color)
+                else:
+                    # Fallback for scanned/irregular PDFs: subtle fill only, no border.
+                    painter.fillRect(QRectF(x0, y0, x1 - x0, y1 - y0), QColor(255, 235, 59, 55))
+                return
             elif self._tool == TOOL_FIELD:
                 fill, pen = QColor(100, 150, 255, 80), QColor(40, 90, 200)
             elif self._tool == TOOL_ADD_IMAGE:
                 fill, pen = QColor(255, 140, 0, 70), QColor(180, 90, 0)
             elif self._tool == TOOL_SELECT_TEXT:
                 fill, pen = QColor(80, 130, 255, 45), QColor(40, 90, 200)
-            else:  # TOOL_LINK
+            else:  # TOOL_LINK / SHAPE tools
                 fill, pen = QColor(0, 200, 100, 70), QColor(0, 130, 60)
             painter.fillRect(QRectF(x0, y0, x1 - x0, y1 - y0), fill)
             painter.setPen(QPen(pen, 1, Qt.DashLine))
@@ -893,7 +989,11 @@ class PDFCanvas(QWidget):
                 if (x1 - x0) > 2 and (y1 - y0) > 2:
                     rect = QRectF(x0, y0, x1 - x0, y1 - y0)
                     if tool_was == TOOL_HIGHLIGHT:
-                        self.highlight_selected.emit(self._drag_start_page, rect)
+                        self.highlight_selected.emit(self._drag_start_page, {
+                            "rect": rect,
+                            "start": (float(self._drag_start_pdf.x()), float(self._drag_start_pdf.y())),
+                            "end": (float(self._drag_current_pdf.x()), float(self._drag_current_pdf.y())),
+                        })
                     elif tool_was == TOOL_FIELD:
                         self.field_placement_requested.emit(self._drag_start_page, rect)
                     elif tool_was == TOOL_LINK:
@@ -1071,8 +1171,21 @@ class PDFViewer(QScrollArea):
         self.set_zoom(self.canvas.zoom - ZOOM_STEP)
 
     def fit_width(self):
+        """Fit to the available viewport width.
+
+        Called automatically when fixed sidebars collapse/expand.  Preserve the
+        user's approximate reading position so the page does not jump badly.
+        """
+        vbar = self.verticalScrollBar()
+        hbar = self.horizontalScrollBar()
+        old_vmax = max(1, vbar.maximum())
+        old_hmax = max(1, hbar.maximum())
+        v_ratio = vbar.value() / old_vmax
+        h_ratio = hbar.value() / old_hmax
         self.canvas.fit_width(self.viewport().width())
         self.zoom_changed.emit(self.canvas.zoom)
+        vbar.setValue(int(v_ratio * max(1, vbar.maximum())))
+        hbar.setValue(int(h_ratio * max(1, hbar.maximum())))
 
     def fit_page(self):
         self.canvas.fit_page(self.viewport().width(), self.viewport().height())

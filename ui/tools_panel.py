@@ -7,7 +7,7 @@ a consistent height, hover/checked states, and section headers with rules.
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
-    QFrame, QSizePolicy, QToolButton, QPushButton,
+    QFrame, QSizePolicy, QToolButton, QPushButton, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QColor
@@ -15,24 +15,27 @@ from PySide6.QtGui import QColor
 from ui.icons import make_icon
 
 
-ACCENT = "#2667FF"
-ICON_LIGHT = "#42454E"
-ICON_DARK = "#C7CAD1"
+ACCENT = "#2563EB"
+ACCENT_SOFT = "#EAF1FF"
+ACCENT_LINE = "#CFE0FF"
+ICON_LIGHT = "#475569"
+ICON_DARK = "#F1F5F9"
+PANEL_ICON_SIZE = 18
 
 
 class ToolButton(QPushButton):
     """A full-width row: [icon]  Label."""
 
-    ROW_HEIGHT = 38
-    ICON_SIZE = 19
+    ROW_HEIGHT = 36
+    ICON_SIZE = PANEL_ICON_SIZE
 
     def __init__(self, icon_name: str, text: str, tooltip: str = "",
                  checkable: bool = False, dark: bool = False, parent=None):
         super().__init__(parent)
         self._icon_name = icon_name
         self._dark = dark
-        # Escape & so QPushButton doesn't treat it as a mnemonic (showing _)
-        self.setText("   " + text.replace("&", "&&"))
+        # Escape & so QPushButton doesn't treat it as a mnemonic.
+        self.setText(text.replace("&", "&&"))
         self.setToolTip(tooltip or text)
         self.setCheckable(checkable)
         self.setIcon(make_icon(icon_name,
@@ -46,26 +49,33 @@ class ToolButton(QPushButton):
         self._apply_style()
 
     def _apply_style(self):
-        text_color = "#E6E8EC" if self._dark else "#2B2D33"
-        hover_bg = "rgba(255,255,255,0.06)" if self._dark else "rgba(20,30,60,0.05)"
-        press_bg = "rgba(255,255,255,0.10)" if self._dark else "rgba(20,30,60,0.09)"
-        checked_bg = "rgba(38,103,255,0.16)"
+        text_color = "#F8FAFC" if self._dark else "#172033"
+        hover_bg = "rgba(255,255,255,0.07)" if self._dark else "#F4F7FC"
+        press_bg = "rgba(255,255,255,0.11)" if self._dark else "#EEF4FF"
+        checked_bg = "rgba(96,165,250,0.20)" if self._dark else ACCENT_SOFT
+        checked_border = "rgba(147,197,253,0.35)" if self._dark else ACCENT_LINE
         self.setStyleSheet(f"""
             QPushButton {{
                 text-align: left;
                 padding: 0 14px;
                 border: none;
-                border-radius: 8px;
+                border-left: 3px solid transparent;
+                border-radius: 0;
                 background: transparent;
                 color: {text_color};
-                font-size: 13px;
+                font-size: 12.5px;
+                font-weight: 650;
             }}
-            QPushButton:hover {{ background: {hover_bg}; }}
-            QPushButton:pressed {{ background: {press_bg}; }}
+            QPushButton:hover {{
+                background: transparent;
+                border-left-color: {checked_border};
+            }}
+            QPushButton:pressed {{ background: transparent; }}
             QPushButton:checked {{
-                background: {checked_bg};
+                background: transparent;
+                border-left-color: {ACCENT};
                 color: {ACCENT};
-                font-weight: 600;
+                font-weight: 800;
             }}
         """)
 
@@ -91,19 +101,18 @@ class SectionHeader(QWidget):
         self._dark = dark
         self._collapsed = False
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(34)
+        self.setFixedHeight(36)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 10, 12, 6)
+        lay.setContentsMargins(12, 11, 10, 5)
         lay.setSpacing(8)
-        self.chevron = QLabel("\u25BC")  # down arrow = expanded
-        self.chevron.setStyleSheet(
-            f"color: {'#888C96' if dark else '#9499A6'}; font-size: 9px;")
-        lay.addWidget(self.chevron)
+        self.chevron = QLabel("")  # no down-arrow marker for premium flat headers
+        self.chevron.setFixedWidth(0)
+        self.chevron.hide()
         self.lbl = QLabel(text.upper())
-        color = "#6E7280" if not dark else "#9499A6"
+        color = "#6E7280" if not dark else "#CBD5E1"
         self.lbl.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: 700; "
-            f"letter-spacing: 1.4px; background: transparent;")
+            f"color: {color}; font-size: 10px; font-weight: 800; "
+            f"letter-spacing: 1.6px; background: transparent;")
         lay.addWidget(self.lbl)
         self.rule = QFrame()
         self.rule.setFrameShape(QFrame.HLine)
@@ -125,16 +134,16 @@ class SectionHeader(QWidget):
 
     def set_collapsed(self, collapsed: bool):
         self._collapsed = collapsed
-        self.chevron.setText("\u25B6" if collapsed else "\u25BC")  # right vs down
+        self.chevron.setText("")
 
     def set_dark(self, dark):
         self._dark = dark
-        color = "#6E7280" if not dark else "#9499A6"
+        color = "#6E7280" if not dark else "#CBD5E1"
         self.lbl.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: 700; "
-            f"letter-spacing: 1.4px; background: transparent;")
+            f"color: {color}; font-size: 10px; font-weight: 800; "
+            f"letter-spacing: 1.6px; background: transparent;")
         self.chevron.setStyleSheet(
-            f"color: {'#888C96' if dark else '#9499A6'}; font-size: 9px;")
+            f"color: {'#CBD5E1' if dark else '#9499A6'}; font-size: 9px;")
         self.rule.setStyleSheet(
             f"color: {'rgba(255,255,255,0.08)' if dark else 'rgba(20,30,60,0.07)'};")
         self._update_hover_style()
@@ -192,12 +201,23 @@ class AllToolsPanel(QWidget):
     to_images_requested = Signal()
     images_to_pdf_requested = Signal()
     to_text_requested = Signal()
+    pdf_to_word_requested = Signal()
     ocr_requested = Signal()
+
+    # View controls moved from the top bar into All Tools
+    zoom_in_requested = Signal()
+    zoom_out_requested = Signal()
+    fit_width_requested = Signal()
+    fit_page_requested = Signal()
+    view_mode_changed = Signal(str)
+    language_changed = Signal(str)
+    app_theme_changed = Signal(str, str)  # appearance, accent color
 
     def __init__(self, dark: bool = False, parent=None):
         super().__init__(parent)
         self.setObjectName("AllToolsPanel")
         self._dark = dark
+        self._apply_panel_style()
         self._checkable = {}
         self._all_buttons = []
         self._headers = []
@@ -212,19 +232,19 @@ class AllToolsPanel(QWidget):
         from PySide6.QtWidgets import QLineEdit
         search_wrap = QWidget()
         sw = QVBoxLayout(search_wrap)
-        sw.setContentsMargins(10, 10, 10, 6)
+        sw.setContentsMargins(12, 12, 12, 8)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("\U0001F50D  Search tools…")
+        self.search.setPlaceholderText("Search tools…")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedHeight(32)
+        self.search.setFixedHeight(38)
         _sbg = "#2A2D34" if dark else "#FFFFFF"
         _sbd = "#3A3E47" if dark else "#DCDFE6"
-        _stx = "#E6E8EC" if dark else "#2B2D33"
+        _stx = "#F8FAFC" if dark else "#2B2D33"
         self.search.setStyleSheet(
             f"QLineEdit {{ background: {_sbg}; border: 1px solid {_sbd};"
-            f" border-radius: 8px; padding: 4px 10px; color: {_stx};"
-            f" font-size: 13px; }}"
-            f"QLineEdit:focus {{ border: 1px solid {ACCENT}; }}")
+            f" border-radius: 12px; padding: 6px 12px; color: {_stx};"
+            f" font-size: 13px; font-weight: 500; }}"
+            f"QLineEdit:focus {{ border: 1px solid {ACCENT}; background: {'#232733' if dark else '#FFFFFF'}; }}")
         sw.addWidget(self.search)
         outer.addWidget(search_wrap)
         self.search.textChanged.connect(self._filter_tools)
@@ -238,26 +258,222 @@ class AllToolsPanel(QWidget):
         inner = QWidget()
         scroll.setWidget(inner)
         self._layout = QVBoxLayout(inner)
-        self._layout.setContentsMargins(8, 8, 8, 12)
-        self._layout.setSpacing(1)
+        self._layout.setContentsMargins(10, 8, 10, 14)
+        self._layout.setSpacing(3)
 
+        # View controls live directly in the slim left rail, under All Tools.
         self._build()
+
+
+    def _icon_button(self, icon_name: str, tooltip: str, signal=None):
+        """Small square vector-icon button used by the View Controls group."""
+        b = QToolButton()
+        b.setObjectName("PanelIconButton")
+        b.setIcon(make_icon(icon_name, ICON_DARK if self._dark else ICON_LIGHT, PANEL_ICON_SIZE))
+        b.setIconSize(QSize(PANEL_ICON_SIZE, PANEL_ICON_SIZE))
+        b.setToolTip(tooltip)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setFixedSize(QSize(30, 30))
+        if signal is not None:
+            b.clicked.connect(lambda checked=False: signal.emit())
+        self._style_panel_icon_button(b)
+        return b
+
+    def _style_panel_icon_button(self, b):
+        bg = "rgba(255,255,255,0.06)" if self._dark else "#FFFFFF"
+        hover = "rgba(96,165,250,0.22)" if self._dark else "#EEF4FF"
+        border = "#3A3E47" if self._dark else "#DDE3ED"
+        b.setStyleSheet(f"""
+            QToolButton#PanelIconButton {{
+                background: transparent; border: none; border-radius: 0;
+                padding: 0;
+            }}
+            QToolButton#PanelIconButton:hover {{ background: transparent; color: #2563EB; }}
+            QToolButton#PanelIconButton:pressed {{ background: transparent; }}
+        """)
+
+    def _build_view_controls(self, L):
+        """Zoom, fit, page view, language, and theme controls in the left sidebar."""
+        from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QMenu
+        from utils.i18n import available_languages, current_language
+        from utils.settings import AppSettings
+
+        self._section(L, "View Controls")
+
+        # Zoom row: vector zoom out/in icons + live percentage label.
+        zoom_wrap = QWidget()
+        zh = QHBoxLayout(zoom_wrap)
+        zh.setContentsMargins(4, 2, 4, 2)
+        zh.setSpacing(6)
+        zh.addWidget(self._icon_button("zoom_out", "Zoom out (Ctrl+−)", self.zoom_out_requested))
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("SidebarZoomLabel")
+        self.zoom_label.setAlignment(Qt.AlignCenter)
+        self.zoom_label.setMinimumWidth(64)
+        self.zoom_label.setStyleSheet(
+            f"QLabel#SidebarZoomLabel {{ background: {'#2A2D34' if self._dark else '#FFFFFF'};"
+            f" border: 1px solid {'#3A3E47' if self._dark else '#DDE3ED'}; border-radius: 10px;"
+            f" color: {'#E9EDF5' if self._dark else '#172033'}; font-size: 12.5px; font-weight: 800; padding: 7px 8px; }}")
+        zh.addWidget(self.zoom_label, 1)
+        zh.addWidget(self._icon_button("zoom_in", "Zoom in (Ctrl++)", self.zoom_in_requested))
+        L.addWidget(zoom_wrap)
+        self._current_group.append(zoom_wrap)
+
+        fit_wrap = QWidget()
+        fh = QHBoxLayout(fit_wrap)
+        fh.setContentsMargins(4, 2, 4, 2)
+        fh.setSpacing(6)
+        fit_w = self._icon_button("fit_width", "Fit width", self.fit_width_requested)
+        fit_w.setText("W")
+        fit_w.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        fit_w.setFixedWidth(72)
+        fit_p = self._icon_button("fit_page", "Fit page", self.fit_page_requested)
+        fit_p.setText("P")
+        fit_p.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        fit_p.setFixedWidth(72)
+        fh.addWidget(fit_w)
+        fh.addWidget(fit_p)
+        fh.addStretch(1)
+        L.addWidget(fit_wrap)
+        self._current_group.append(fit_wrap)
+
+        self.view_mode_combo = QComboBox()
+        self.view_mode_combo.setObjectName("SidebarViewCombo")
+        page_icon = make_icon("pages", ICON_DARK if self._dark else ICON_LIGHT, PANEL_ICON_SIZE)
+        self.view_mode_combo.addItem(page_icon, "Continuous", "continuous")
+        self.view_mode_combo.addItem(page_icon, "Single page", "single")
+        self.view_mode_combo.addItem(page_icon, "Two pages", "two_page")
+        self.view_mode_combo.setToolTip("Page view")
+        self.view_mode_combo.currentIndexChanged.connect(
+            lambda i: self.view_mode_changed.emit(self.view_mode_combo.itemData(i)))
+        self._style_combo(self.view_mode_combo)
+        L.addWidget(self.view_mode_combo)
+        self._current_group.append(self.view_mode_combo)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setObjectName("SidebarLanguageCombo")
+        self.lang_combo.setToolTip("Language")
+        lang_icon = make_icon("language", ICON_DARK if self._dark else ICON_LIGHT, PANEL_ICON_SIZE)
+        self.lang_combo.blockSignals(True)
+        for code, name in available_languages().items():
+            self.lang_combo.addItem(lang_icon, f"{code.upper()} — {name}", code)
+        cur = current_language()
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == cur:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.blockSignals(False)
+        self.lang_combo.currentIndexChanged.connect(
+            lambda i: self.language_changed.emit(self.lang_combo.itemData(i)))
+        self._style_combo(self.lang_combo)
+        L.addWidget(self.lang_combo)
+        self._current_group.append(self.lang_combo)
+
+        self.theme_btn = QToolButton()
+        self.theme_btn.setObjectName("SidebarThemeButton")
+        self.theme_btn.setText("Theme")
+        self.theme_btn.setIcon(make_icon("theme", ICON_DARK if self._dark else ICON_LIGHT, PANEL_ICON_SIZE))
+        self.theme_btn.setIconSize(QSize(PANEL_ICON_SIZE, PANEL_ICON_SIZE))
+        self.theme_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.theme_btn.setPopupMode(QToolButton.InstantPopup)
+        self.theme_btn.setToolTip("Theme")
+        self.theme_btn.setCursor(Qt.PointingHandCursor)
+        self.theme_btn.setFixedHeight(36)
+        self._style_theme_button()
+        self._build_theme_menu()
+        L.addWidget(self.theme_btn)
+        self._current_group.append(self.theme_btn)
+        L.addSpacing(4)
+
+    def _style_combo(self, combo):
+        combo.setFixedHeight(36)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {'#2A2D34' if self._dark else '#FFFFFF'};
+                border: 1px solid {'#3A3E47' if self._dark else '#DDE3ED'};
+                border-radius: 10px;
+                padding: 5px 10px;
+                color: {'#E9EDF5' if self._dark else '#172033'};
+                font-size: 12.5px;
+                font-weight: 650;
+            }}
+            QComboBox:hover {{ border-color: #AFCBFF; }}
+            QComboBox::drop-down {{ border: none; width: 22px; }}
+            QComboBox QAbstractItemView {{ background: {'#111827' if self._dark else '#FFFFFF'}; color: {'#F8FAFC' if self._dark else '#172033'}; selection-background-color: {'#1E3A8A' if self._dark else '#E8F0FF'}; selection-color: {'#FFFFFF' if self._dark else '#0F172A'}; border: 1px solid {'#334155' if self._dark else '#DDE3ED'}; }}
+        """)
+
+    def _style_theme_button(self):
+        self.theme_btn.setStyleSheet(f"""
+            QToolButton#SidebarThemeButton {{
+                text-align: left;
+                background: {'#2A2D34' if self._dark else '#FFFFFF'};
+                border: 1px solid {'#3A3E47' if self._dark else '#DDE3ED'};
+                border-radius: 10px;
+                padding: 0 12px;
+                color: {'#E9EDF5' if self._dark else '#172033'};
+                font-size: 12.5px;
+                font-weight: 800;
+            }}
+            QToolButton#SidebarThemeButton:hover {{ background: {'rgba(96,165,250,0.22)' if self._dark else '#EEF4FF'}; border-color: #AFCBFF; }}
+            QToolButton#SidebarThemeButton::menu-indicator {{ image: none; width: 0px; }}
+        """)
+
+    def _build_theme_menu(self):
+        from PySide6.QtWidgets import QMenu
+        from utils.settings import AppSettings
+        st = AppSettings()
+        current_appearance = st.appearance()
+        current_color = st.theme()
+        menu = QMenu(self.theme_btn)
+        appearance_menu = menu.addMenu("Mode")
+        for code, name in (("light", "Light"), ("dark", "Dark"), ("system", "System")):
+            act = appearance_menu.addAction(("✓ " if code == current_appearance else "   ") + name)
+            act.triggered.connect(lambda checked=False, a=code: self.app_theme_changed.emit(a, current_color))
+        color_menu = menu.addMenu("Color")
+        for code, name in (("blue", "Blue"), ("purple", "Purple"), ("emerald", "Emerald"), ("rose", "Rose"), ("amber", "Amber"), ("slate", "Slate")):
+            act = color_menu.addAction(("✓ " if code == current_color else "   ") + name)
+            act.triggered.connect(lambda checked=False, c=code: self.app_theme_changed.emit(current_appearance, c))
+        self.theme_btn.setMenu(menu)
+
+    def refresh_language_selector(self):
+        try:
+            from utils.i18n import available_languages, current_language
+            self.lang_combo.blockSignals(True)
+            self.lang_combo.clear()
+            icon = make_icon("language", ICON_DARK if self._dark else ICON_LIGHT, PANEL_ICON_SIZE)
+            for code, name in available_languages().items():
+                self.lang_combo.addItem(icon, f"{code.upper()} — {name}", code)
+            cur = current_language()
+            for i in range(self.lang_combo.count()):
+                if self.lang_combo.itemData(i) == cur:
+                    self.lang_combo.setCurrentIndex(i)
+                    break
+            self.lang_combo.blockSignals(False)
+        except Exception:
+            pass
+
+    def set_zoom_label(self, zoom: float):
+        try:
+            self.zoom_label.setText(f"{int(zoom * 100)}%")
+        except Exception:
+            pass
 
     def _build(self):
         L = self._layout
 
         # ---- RESEARCH TOOLS — highlighted at the very top, easy to find ----
-        self._research_header(L, "\U0001F393  RESEARCH TOOLS")
+        self._research_header(L, "RESEARCH TOOLS")
         self.library_btn = self._add_feature(
-            L, "\U0001F4DA", "Research Library",
+            L, "library", "Research Library",
             "Organize all your papers — import, tag, search, open",
             self.library_requested)
         self.refcol_btn = self._add_feature(
-            L, "\U0001F517", "Reference Collection",
+            L, "reference", "Reference Collection",
             "Collect references from citations and save them to Excel",
             self.reference_collection_requested)
         self.notescol_btn = self._add_feature(
-            L, "\U0001F4DD", "Text / Notes Collection",
+            L, "note", "Text / Notes Collection",
             "Save important highlighted text with its source",
             self.notes_collection_requested)
         L.addSpacing(4)
@@ -389,6 +605,8 @@ class AllToolsPanel(QWidget):
                   "Build PDF from images", self.images_to_pdf_requested)
         self._add(L, "to_text", "PDF \u2192 Text",
                   "Extract all text", self.to_text_requested)
+        self._add(L, "to_word", "PDF \u2192 Word",
+                  "Export editable Word .docx", self.pdf_to_word_requested)
         self._add(L, "ocr", "Run OCR",
                   "Make scanned PDF searchable", self.ocr_requested)
 
@@ -424,39 +642,51 @@ class AllToolsPanel(QWidget):
                     any_match = True
             hdr.setVisible(any_match)
 
+    def _apply_panel_style(self):
+        bg = "#0F172A" if self._dark else "#F8FAFE"
+        border = "#334155" if self._dark else "#E2E8F0"
+        self.setStyleSheet(f"""
+            QWidget#AllToolsPanel {{
+                background: {bg};
+                border-right: 1px solid {border};
+            }}
+        """)
+
     def _research_header(self, layout, text):
         """A bold, colored header for the highlighted research section."""
         h = QLabel(text)
         h.setStyleSheet(
-            "color: #2667FF; font-size: 11px; font-weight: 800;"
-            " letter-spacing: 1px; padding: 10px 14px 4px 14px;")
+            f"color: {'#93C5FD' if self._dark else '#2563EB'}; font-size: 10.5px; font-weight: 900;"
+            " letter-spacing: 1.6px; padding: 12px 12px 6px 12px; background: transparent;")
         layout.addWidget(h)
 
-    def _add_feature(self, layout, emoji, text, tooltip, signal):
+    def _add_feature(self, layout, icon_name, text, tooltip, signal):
         """A prominent, highlighted button for an important research tool."""
-        btn = QPushButton(f"  {emoji}   {text}")
+        btn = QPushButton(text.replace("&", "&&"))
+        btn.setIcon(make_icon(icon_name, ICON_DARK if self._dark else "#334155", PANEL_ICON_SIZE))
+        btn.setIconSize(QSize(PANEL_ICON_SIZE, PANEL_ICON_SIZE))
         btn.setToolTip(tooltip)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedHeight(42)
+        btn.setFixedHeight(38)
         btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        bg = "rgba(38,103,255,0.10)" if not self._dark else "rgba(38,103,255,0.20)"
-        hover = "rgba(38,103,255,0.18)" if not self._dark else "rgba(38,103,255,0.30)"
-        txt = "#1B53E0" if not self._dark else "#9DB8FF"
+        bg = "rgba(96,165,250,0.13)" if self._dark else "#EEF4FF"
+        hover = "rgba(96,165,250,0.24)" if self._dark else "#E3EDFF"
+        border = "rgba(147,197,253,0.32)" if self._dark else "#D2E2FF"
+        txt = "#BFDBFE" if self._dark else "#1D4ED8"
         btn.setStyleSheet(
-            f"QPushButton {{ text-align: left; padding: 0 12px; border: none;"
-            f" border-radius: 9px; background: {bg}; color: {txt};"
-            f" font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: {hover}; }}")
+            f"QPushButton {{ text-align: left; padding: 0 14px; border: 1px solid {border};"
+            f" border-radius: 12px; background: {bg}; color: {txt};"
+            f" font-size: 12.5px; font-weight: 800; }}"
+            f"QPushButton:hover {{ background: {hover}; border-color: #AFCBFF; }}")
         btn.clicked.connect(lambda checked=False: signal.emit())
-        # small left margin wrapper for breathing room
         from PySide6.QtWidgets import QWidget as _QW, QHBoxLayout as _QH
         wrap = _QW()
-        h = _QH(wrap); h.setContentsMargins(8, 2, 8, 2); h.addWidget(btn)
+        h = _QH(wrap); h.setContentsMargins(4, 3, 4, 3); h.addWidget(btn)
         layout.addWidget(wrap)
         return btn
 
     def _section(self, layout, text):
-        sp = QWidget(); sp.setFixedHeight(4)
+        sp = QWidget(); sp.setFixedHeight(8)
         layout.addWidget(sp)
         h = SectionHeader(text, self._dark)
         layout.addWidget(h)
@@ -492,10 +722,19 @@ class AllToolsPanel(QWidget):
         if dark == self._dark:
             return
         self._dark = dark
+        self._apply_panel_style()
         for btn in self._all_buttons:
             btn.refresh_icon(dark)
         for h in self._headers:
             h.set_dark(dark)
+        try:
+            self.theme_btn.setIcon(make_icon("theme", ICON_DARK if dark else ICON_LIGHT, PANEL_ICON_SIZE))
+            self._style_theme_button()
+            self._build_theme_menu()
+            self._style_combo(self.view_mode_combo)
+            self._style_combo(self.lang_combo)
+        except Exception:
+            pass
 
     def uncheck_all_except(self, keep_name=None):
         for name, b in self._checkable.items():

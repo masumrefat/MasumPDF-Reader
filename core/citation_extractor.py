@@ -1,7 +1,7 @@
 """Citation and reference extractor.
 
 Pulls in-text citations (like [1], [2-4], (Smith, 2020)) and the reference
-list / bibliography out of a PDF. No internet or AI is used — this is plain
+list / bibliography out of a PDF. Fully offline; this uses plain
 text pattern matching, so it works fully offline.
 
 Intended for students and researchers reading academic papers.

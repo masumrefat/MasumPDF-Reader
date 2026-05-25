@@ -16,6 +16,21 @@ WHAT YOU NEED (both free)
 2. Python installer  ->  https://www.python.org/downloads/
    Download:  python-3.12.4-amd64.exe
 
+
+------------------------------------------------------------
+BUILDING A REAL .EXE FIRST (recommended)
+------------------------------------------------------------
+Before making the public installer, first build the standalone exe:
+
+   1. Double-click developer\install.bat
+   2. Double-click developer\build-exe.bat
+
+The output will be:
+   developer\app_exe\MasumPDFReader.exe
+
+PySide6/Qt6 is included in this app_exe folder. Keep the whole
+app_exe folder together; do not move only the exe.
+
 ------------------------------------------------------------
 STEPS
 ------------------------------------------------------------
@@ -57,7 +72,7 @@ PUTTING IT ON GITHUB (file is ~35 MB)
 GitHub normal upload limit is 25 MB, BUT GitHub RELEASES allow up
 to 2 GB. So upload the Setup.exe as a RELEASE attachment:
    1. Repo > Releases > Create a new release
-   2. Tag: v4.16.0   (match the app version)
+   2. Tag: v1.0.2   (match the app version)
    3. Drag Setup.exe into "Attach binaries" - WAIT for upload to finish
    4. Publish release
 Your app's auto-update reads from Releases, so this connects together.

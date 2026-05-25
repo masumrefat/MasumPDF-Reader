@@ -122,16 +122,45 @@ class ImageExportWorker(BaseWorker):
             self.failed.emit(str(e))
 
 
+class PdfToWordWorker(BaseWorker):
+    """Convert a PDF to a Word .docx file in the background."""
+
+    def __init__(self, pdf_path: str, output_path: str):
+        super().__init__()
+        self.pdf_path = pdf_path
+        self.output_path = output_path
+
+    def run(self):
+        try:
+            from core.converter import Converter
+
+            def cb(done: int, total: int):
+                if self.is_cancelled():
+                    raise RuntimeError("PDF to Word conversion cancelled")
+                self.progress.emit(int(done * 100 / max(total, 1)))
+                self.message.emit(f"Converting page {done}/{total}")
+
+            ok = Converter.pdf_to_docx(self.pdf_path, self.output_path, progress_cb=cb)
+            if not ok:
+                self.failed.emit("python-docx is not installed. Please install requirements again.")
+                return
+            self.finished_ok.emit(self.output_path)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class CompressWorker(BaseWorker):
     """Compress a PDF in the background."""
 
     def __init__(self, input_path: str, output_path: str,
-                 target_dpi: int, jpeg_quality: int):
+                 target_dpi: int = 100, jpeg_quality: int = 70,
+                 options: dict | None = None):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
         self.target_dpi = target_dpi
         self.jpeg_quality = jpeg_quality
+        self.options = options or {}
         self.stats = None
 
     def run(self):
@@ -149,6 +178,7 @@ class CompressWorker(BaseWorker):
                 target_dpi=self.target_dpi,
                 jpeg_quality=self.jpeg_quality,
                 progress_cb=cb,
+                options=self.options,
             )
             self.finished_ok.emit(self.output_path)
         except Exception as e:

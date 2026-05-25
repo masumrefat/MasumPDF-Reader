@@ -2,7 +2,7 @@
 
 As the user clicks citations/references in papers, entries are collected here,
 de-duplicated, and can be saved to / loaded from an Excel (.xlsx) file so a
-researcher can grow one collection across many papers. No AI, fully offline.
+researcher can grow one collection across many papers. Fully offline.
 """
 
 import re
@@ -10,7 +10,7 @@ import os
 
 
 # Try to pull a year and authors out of a raw reference string, so the Excel
-# has useful columns. This is best-effort plain pattern matching (no AI).
+# has useful columns. This is best-effort local pattern matching.
 _YEAR = re.compile(r"\b(19|20)\d{2}[a-z]?\b")
 
 

@@ -13,7 +13,7 @@ from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QFont, QImage
 
 import os
 from utils.file_utils import human_size
-from utils.constants import OCR_LANGUAGES, THEME_LIGHT, THEME_DARK
+from utils.constants import OCR_LANGUAGES, COLOR_THEMES, APPEARANCES
 
 
 class PasswordDialog(QDialog):
@@ -481,11 +481,24 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        # Theme
+        # Full app theme: Light/Dark appearance + accent color.
+        self.appearance = QComboBox()
+        current_appearance = settings.appearance()
+        for code, name in APPEARANCES.items():
+            self.appearance.addItem(name, code)
+            if code == current_appearance:
+                self.appearance.setCurrentIndex(self.appearance.count() - 1)
+        self.appearance.setToolTip("Choose Light or Dark mode. Text colors update with the UI.")
+        form.addRow("Mode:", self.appearance)
+
         self.theme = QComboBox()
-        self.theme.addItems(["Light", "Dark"])
-        self.theme.setCurrentIndex(1 if settings.theme() == THEME_DARK else 0)
-        form.addRow("Theme:", self.theme)
+        current_theme = settings.theme()
+        for code, name in COLOR_THEMES.items():
+            self.theme.addItem(name, code)
+            if code == current_theme:
+                self.theme.setCurrentIndex(self.theme.count() - 1)
+        self.theme.setToolTip("Choose the app accent color. The whole GUI color family updates.")
+        form.addRow("App color:", self.theme)
 
         # Default zoom
         self.default_zoom = QSpinBox()
@@ -531,8 +544,8 @@ class SettingsDialog(QDialog):
             if code == settings.ui_language():
                 self.ui_lang.setCurrentIndex(self.ui_lang.count() - 1)
         self.ui_lang.setToolTip(
-            "Language of the app's menus and buttons. Takes full effect after "
-            "you restart the app.")
+            "Language of the app's menus and buttons. Applies automatically "
+            "after you click OK.")
         form.addRow("Interface language:", self.ui_lang)
 
         # OCR language
@@ -576,7 +589,7 @@ class SettingsDialog(QDialog):
             self.highlight_color_btn.setStyleSheet(f"background-color: {hex_c};")
 
     def apply(self):
-        self.settings.set_theme(THEME_DARK if self.theme.currentIndex() == 1 else THEME_LIGHT)
+        self.settings.set_app_theme(self.appearance.currentData(), self.theme.currentData())
         self.settings.set_default_zoom(self.default_zoom.value() / 100.0)
         self.settings.set_render_quality(self.render_quality.currentText())
         self.settings.set_auto_fit_on_open(self.auto_fit.isChecked())
@@ -593,12 +606,12 @@ class SettingsDialog(QDialog):
 # Compress dialog
 # =============================================================================
 class CompressDialog(QDialog):
-    """Pick a target DPI and JPEG quality for compression."""
+    """PDF optimizer dialog with simple presets and advanced image options."""
 
     def __init__(self, original_size_bytes: int = 0, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Compress PDF")
-        self.setMinimumWidth(440)
+        self.setWindowTitle("PDF Optimizer")
+        self.setMinimumWidth(760)
         from core.compressor import DPI_PRESETS
 
         layout = QVBoxLayout(self)
@@ -607,18 +620,32 @@ class CompressDialog(QDialog):
             mb = original_size_bytes / (1024 * 1024)
             layout.addWidget(QLabel(f"Original size: <b>{mb:.2f} MB</b>"))
 
-        layout.addWidget(QLabel("Choose a target quality. Lower DPI = smaller file."))
-
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Settings:"))
         self.preset_combo = QComboBox()
         for label, dpi, q in DPI_PRESETS:
             self.preset_combo.addItem(label, (dpi, q))
+        self.preset_combo.addItem("Custom / Advanced", None)
         self.preset_combo.setCurrentIndex(2)  # Medium (100 DPI) default
-        layout.addWidget(self.preset_combo)
+        self.preset_combo.currentIndexChanged.connect(self._apply_preset_to_advanced)
+        top.addWidget(self.preset_combo, 1)
+        top.addStretch(1)
+        self.audit_btn = QPushButton("Audit space usage...")
+        self.audit_btn.clicked.connect(self._show_audit_info)
+        top.addWidget(self.audit_btn)
+        layout.addLayout(top)
 
-        # Custom DPI + quality, in case the user wants finer control
-        custom_group = QGroupBox("Custom (overrides the preset)")
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # Simple tab
+        simple = QWidget()
+        sl = QVBoxLayout(simple)
+        sl.addWidget(QLabel("Choose a target quality. Lower DPI = smaller file."))
+
+        custom_group = QGroupBox("Quick custom setting")
         cl = QVBoxLayout(custom_group)
-        self.custom_check = QCheckBox("Use custom DPI and quality")
+        self.custom_check = QCheckBox("Use quick custom DPI and quality")
         cl.addWidget(self.custom_check)
 
         row1 = QHBoxLayout()
@@ -641,23 +668,209 @@ class CompressDialog(QDialog):
         row2.addWidget(self.quality_spin)
         row2.addStretch(1)
         cl.addLayout(row2)
+        sl.addWidget(custom_group)
+        sl.addWidget(QLabel(
+            "<small>Safe mode: transparent / soft-mask images are preserved to avoid missing images. "
+            "Text and vector content is not rasterized.</small>"))
+        sl.addStretch(1)
+        self.tabs.addTab(simple, "Basic")
 
-        layout.addWidget(custom_group)
+        # Advanced tab, inspired by common PDF optimizer tools.
+        adv = QWidget()
+        al = QHBoxLayout(adv)
 
-        layout.addWidget(QLabel(
-            "<small>Images already smaller than the target are left alone. "
-            "Text and vector content is never lost.</small>"))
+        left_box = QGroupBox("Optimize")
+        left = QVBoxLayout(left_box)
+        self.chk_images = QCheckBox("Images")
+        self.chk_fonts = QCheckBox("Fonts")
+        self.chk_transparency = QCheckBox("Transparency")
+        self.chk_discard_objects = QCheckBox("Discard Objects")
+        self.chk_discard_user_data = QCheckBox("Discard User Data")
+        self.chk_cleanup = QCheckBox("Clean Up")
+        for chk in (self.chk_images, self.chk_fonts, self.chk_discard_objects,
+                    self.chk_discard_user_data, self.chk_cleanup):
+            chk.setChecked(True)
+            left.addWidget(chk)
+        self.chk_transparency.setChecked(False)
+        left.insertWidget(2, self.chk_transparency)
+        left.addStretch(1)
+        al.addWidget(left_box)
+
+        right = QVBoxLayout()
+        img_group = QGroupBox("Image Settings")
+        grid = QGridLayout(img_group)
+
+        self.color_dpi = self._spin(30, 600, 150, "")
+        self.color_above = self._spin(30, 1200, 225, "")
+        self.color_quality = self._quality_combo("Medium")
+        self.color_compression = self._compression_combo()
+
+        self.gray_dpi = self._spin(30, 600, 150, "")
+        self.gray_above = self._spin(30, 1200, 225, "")
+        self.gray_quality = self._quality_combo("Medium")
+        self.gray_compression = self._compression_combo()
+
+        self.mono_dpi = self._spin(30, 600, 300, "")
+        self.mono_above = self._spin(30, 1200, 450, "")
+        self.mono_quality = self._quality_combo("Lossless")
+        self.mono_compression = QComboBox()
+        self.mono_compression.addItem("PNG / Flate", "PNG")
+        self.mono_compression.addItem("JPEG", "JPEG")
+
+        row = 0
+        grid.addWidget(QLabel("Color Images:"), row, 0, 1, 6); row += 1
+        self._add_image_row(grid, row, self.color_dpi, self.color_above,
+                            self.color_compression, self.color_quality); row += 2
+        grid.addWidget(QLabel("Grayscale Images:"), row, 0, 1, 6); row += 1
+        self._add_image_row(grid, row, self.gray_dpi, self.gray_above,
+                            self.gray_compression, self.gray_quality); row += 2
+        grid.addWidget(QLabel("Monochrome Images:"), row, 0, 1, 6); row += 1
+        self._add_image_row(grid, row, self.mono_dpi, self.mono_above,
+                            self.mono_compression, self.mono_quality); row += 2
+        grid.addWidget(QLabel("All units are pixels per inch (ppi)."), row, 4, 1, 2)
+        right.addWidget(img_group)
+
+        self.optimize_only = QCheckBox("Optimize images only if there is a reduction in size")
+        self.optimize_only.setChecked(True)
+        right.addWidget(self.optimize_only)
+        right.addWidget(QLabel(
+            "<small>Note: JBIG2 is not enabled because it can be unsafe for scientific PDFs. "
+            "Monochrome images use PNG/Flate by default.</small>"))
+        right.addStretch(1)
+        al.addLayout(right, 1)
+        self.tabs.addTab(adv, "Advanced")
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    def settings(self) -> tuple[int, int]:
-        if self.custom_check.isChecked():
-            return self.dpi_spin.value(), self.quality_spin.value()
-        dpi, q = self.preset_combo.currentData()
-        return dpi, q
+    def _spin(self, mn, mx, val, suffix=""):
+        sp = QSpinBox()
+        sp.setRange(mn, mx)
+        sp.setValue(val)
+        sp.setSingleStep(25)
+        if suffix:
+            sp.setSuffix(suffix)
+        return sp
+
+    def _quality_combo(self, current="Medium"):
+        cb = QComboBox()
+        for label, value in (("Low", 50), ("Medium", 70), ("High", 82),
+                             ("Maximum", 92), ("Lossless", 100)):
+            cb.addItem(label, value)
+        idx = cb.findText(current)
+        if idx >= 0:
+            cb.setCurrentIndex(idx)
+        return cb
+
+    def _compression_combo(self):
+        cb = QComboBox()
+        cb.addItem("JPEG", "JPEG")
+        cb.addItem("PNG / Flate", "PNG")
+        return cb
+
+    def _add_image_row(self, grid, row, dpi_spin, above_spin, compression_combo, quality_combo):
+        grid.addWidget(QLabel("Downsample:"), row, 0)
+        grid.addWidget(QLabel("Bicubic downsampling to"), row, 1)
+        grid.addWidget(dpi_spin, row, 2)
+        grid.addWidget(QLabel("ppi for images above"), row, 3)
+        grid.addWidget(above_spin, row, 4)
+        grid.addWidget(QLabel("ppi."), row, 5)
+        grid.addWidget(QLabel("Compression:"), row + 1, 0)
+        grid.addWidget(compression_combo, row + 1, 1)
+        grid.addWidget(QLabel("Quality:"), row + 1, 2)
+        grid.addWidget(quality_combo, row + 1, 3)
+
+    def _apply_preset_to_advanced(self):
+        data = self.preset_combo.currentData()
+        if not data:
+            return
+        dpi, q = data
+        self.dpi_spin.setValue(dpi)
+        self.quality_spin.setValue(q)
+        # Advanced threshold is intentionally higher than target, similar to Acrobat.
+        above = max(dpi + 50, int(dpi * 1.5))
+        for sp in (self.color_dpi, self.gray_dpi):
+            sp.setValue(dpi)
+        for sp in (self.color_above, self.gray_above):
+            sp.setValue(above)
+        for cb in (self.color_quality, self.gray_quality):
+            self._set_combo_by_data(cb, q)
+
+    def _set_combo_by_data(self, combo, value):
+        best = 0
+        best_diff = 999
+        for i in range(combo.count()):
+            diff = abs(int(combo.itemData(i)) - int(value))
+            if diff < best_diff:
+                best = i; best_diff = diff
+        combo.setCurrentIndex(best)
+
+    def _show_audit_info(self):
+        QMessageBox.information(
+            self, "Audit space usage",
+            "This optimizer focuses on the parts that usually make PDFs large:\n\n"
+            "• Embedded images\n• Fonts\n• Metadata / user data\n• Unused PDF objects\n\n"
+            "A detailed per-object audit can be added later, but these advanced "
+            "settings already control the main compression behavior.")
+
+    def settings(self) -> dict:
+        # Basic tab or quick custom behaves like old dialog.
+        if self.tabs.currentIndex() == 0:
+            if self.custom_check.isChecked():
+                dpi, q = self.dpi_spin.value(), self.quality_spin.value()
+            else:
+                data = self.preset_combo.currentData()
+                dpi, q = data if data else (self.dpi_spin.value(), self.quality_spin.value())
+            above = max(dpi + 50, int(dpi * 1.5))
+            return {
+                "target_dpi": dpi,
+                "jpeg_quality": q,
+                "image_enabled": True,
+                "color_target_dpi": dpi,
+                "color_above_dpi": above,
+                "color_quality": q,
+                "color_compression": "JPEG",
+                "gray_target_dpi": dpi,
+                "gray_above_dpi": above,
+                "gray_quality": q,
+                "gray_compression": "JPEG",
+                "mono_target_dpi": max(150, dpi),
+                "mono_above_dpi": max(300, above),
+                "mono_quality": 100,
+                "mono_compression": "PNG",
+                "optimize_only_if_smaller": True,
+                "deflate_fonts": True,
+                "deflate_streams": True,
+                "discard_metadata": False,
+                "clean": False,
+                "allow_transparency_changes": False,
+            }
+
+        return {
+            "target_dpi": self.color_dpi.value(),
+            "jpeg_quality": int(self.color_quality.currentData()),
+            "image_enabled": self.chk_images.isChecked(),
+            "color_target_dpi": self.color_dpi.value(),
+            "color_above_dpi": self.color_above.value(),
+            "color_quality": int(self.color_quality.currentData()),
+            "color_compression": self.color_compression.currentData(),
+            "gray_target_dpi": self.gray_dpi.value(),
+            "gray_above_dpi": self.gray_above.value(),
+            "gray_quality": int(self.gray_quality.currentData()),
+            "gray_compression": self.gray_compression.currentData(),
+            "mono_target_dpi": self.mono_dpi.value(),
+            "mono_above_dpi": self.mono_above.value(),
+            "mono_quality": int(self.mono_quality.currentData()),
+            "mono_compression": self.mono_compression.currentData(),
+            "optimize_only_if_smaller": self.optimize_only.isChecked(),
+            "deflate_fonts": self.chk_fonts.isChecked(),
+            "deflate_streams": self.chk_cleanup.isChecked(),
+            "discard_metadata": self.chk_discard_user_data.isChecked(),
+            "clean": self.chk_cleanup.isChecked() and self.chk_discard_objects.isChecked(),
+            "allow_transparency_changes": self.chk_transparency.isChecked(),
+        }
 
 
 
@@ -1965,10 +2178,10 @@ class EditLineDialog(QDialog):
         layout.addLayout(color_row)
 
         layout.addWidget(QLabel(
-            "<small>The original characters are whited out and the new text is "
-            "redrawn using a built-in font that matches the style. "
-            "Best results on plain text PDFs — heavy layouts may shift slightly. "
-            "The original file is not changed; you'll be asked where to save.</small>"))
+            "<small>Clean edit mode: the app samples the page background, "
+            "keeps the original size/color as much as possible, and redraws "
+            "the replacement on the same baseline. Best for short corrections; "
+            "PDF text cannot reflow like Microsoft Word.</small>"))
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)

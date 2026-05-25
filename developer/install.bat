@@ -13,7 +13,7 @@ REM  Just double-click this file once. No manual steps.
 REM ============================================================
 
 setlocal EnableDelayedExpansion
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo.
 echo   ===========================================

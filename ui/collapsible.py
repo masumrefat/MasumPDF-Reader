@@ -24,7 +24,7 @@ class _VerticalLabel(QWidget):
         super().__init__(parent)
         self._text = text
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.setMinimumWidth(20)
+        self.setMinimumWidth(34)
 
     def setText(self, text):
         self._text = text
@@ -37,10 +37,10 @@ class _VerticalLabel(QWidget):
         painter.translate(self.width() / 2, self.height() / 2)
         painter.rotate(-90)
         f = QFont()
-        f.setPointSize(10)
+        f.setPointSize(11)
         f.setBold(True)
         painter.setFont(f)
-        painter.setPen(QColor(120, 120, 130))
+        painter.setPen(self.palette().highlight().color())
         painter.drawText(
             int(-self.height() / 2), int(-self.width() / 2),
             self.height(), self.width(),
@@ -56,7 +56,7 @@ class CollapsiblePanel(QWidget):
 
     collapsed_changed = Signal(bool)
 
-    RAIL_WIDTH = 26
+    RAIL_WIDTH = 42
 
     def __init__(self, title: str, content: QWidget,
                  side: str = "left", parent=None):
@@ -81,9 +81,7 @@ class CollapsiblePanel(QWidget):
         header = QFrame()
         header.setObjectName("PanelHeader")
         header.setFixedHeight(38)
-        header.setStyleSheet(
-            "#PanelHeader { background: transparent; "
-            "border-bottom: 1px solid rgba(127,127,127,0.18); }")
+        # Styled by the global app theme.
         hl = QHBoxLayout(header)
         hl.setContentsMargins(14, 0, 8, 0)
         title_lbl = QLabel(title)
@@ -95,12 +93,7 @@ class CollapsiblePanel(QWidget):
         self._collapse_btn.setToolTip(f"Hide {title} panel")
         self._collapse_btn.setCursor(Qt.PointingHandCursor)
         self._collapse_btn.setFixedSize(26, 26)
-        self._collapse_btn.setStyleSheet(
-            "QToolButton { border: 1px solid #C4C8D2; border-radius: 13px;"
-            " font-size: 17px; font-weight: 700; color: #4A4E58;"
-            " background: #EDEFF3; }"
-            "QToolButton:hover { background: #2667FF; color: white;"
-            " border: 1px solid #2667FF; }")
+        self._collapse_btn.setObjectName("PanelCollapseButton")
         self._collapse_btn.clicked.connect(self.collapse)
         if side == "left":
             hl.addWidget(title_lbl)
@@ -116,24 +109,18 @@ class CollapsiblePanel(QWidget):
         # ----- collapsed view (thin rail) -----
         self._rail = QFrame()
         self._rail.setObjectName("PanelRail")
-        self._rail.setStyleSheet(
-            "#PanelRail { background: rgba(127,127,127,14); }")
+        # Styled by the global app theme.
         self._rail.setFixedWidth(self.RAIL_WIDTH)
         self._rail.setCursor(Qt.PointingHandCursor)
         rv = QVBoxLayout(self._rail)
-        rv.setContentsMargins(0, 6, 0, 6)
+        rv.setContentsMargins(4, 8, 4, 8)
         rv.setSpacing(4)
         self._expand_btn = QToolButton()
-        self._expand_btn.setText("›" if side == "left" else "‹")
+        self._expand_btn.setText("☰")
         self._expand_btn.setToolTip(f"Show {title} panel")
         self._expand_btn.setCursor(Qt.PointingHandCursor)
-        self._expand_btn.setFixedSize(24, 24)
-        self._expand_btn.setStyleSheet(
-            "QToolButton { border: 1px solid #C4C8D2; border-radius: 12px;"
-            " font-size: 16px; font-weight: 700; color: #4A4E58;"
-            " background: #EDEFF3; }"
-            "QToolButton:hover { background: #2667FF; color: white;"
-            " border: 1px solid #2667FF; }")
+        self._expand_btn.setFixedSize(34, 34)
+        self._expand_btn.setObjectName("PanelExpandButton")
         self._expand_btn.clicked.connect(self.expand)
         rv.addWidget(self._expand_btn, 0, Qt.AlignHCenter)
         vlabel = _VerticalLabel(title)

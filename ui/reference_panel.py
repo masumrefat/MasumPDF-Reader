@@ -28,14 +28,14 @@ class ReferencePanel(QDialog):
         top.addWidget(self.title_lbl)
         top.addStretch(1)
         self.count_lbl = QLabel("")
-        self.count_lbl.setStyleSheet("color:#666;")
+        self.count_lbl.setObjectName("LogCount")
         top.addWidget(self.count_lbl)
         lay.addLayout(top)
 
         # search row
         srow = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("\U0001F50D  Search references (author, title, year…)")
+        self.search.setPlaceholderText("Search references (author, title, year…)")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh)
         srow.addWidget(self.search)
@@ -59,7 +59,8 @@ class ReferencePanel(QDialog):
         lay.addWidget(self.table, 1)
 
         hint = QLabel("Double-click a row to see the full reference text.")
-        hint.setStyleSheet("color:#888; font-size: 11px;")
+        hint.setObjectName("LogHint")
+        hint.setStyleSheet("font-size: 11px;")
         lay.addWidget(hint)
 
         # buttons

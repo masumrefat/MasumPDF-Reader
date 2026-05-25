@@ -53,48 +53,109 @@ class PDFDocument:
 
     # ---- undo support ----
     def _detect_line_style(self, page, rect):
-        """Read the font name, size, color and weight of the existing text in
-        a line, so an edit can REUSE them (like Sejda does) instead of falling
-        back to a generic font.
+        """Read the visual style of the text inside ``rect``.
 
-        Returns (fontname, size, color_rgb01, bold, italic) or (None,...)."""
+        A PDF normally does not contain Word-like editable paragraphs. For a
+        clean visual edit we therefore need to copy the original text style as
+        closely as possible before covering the old glyphs.  This helper
+        returns:
+
+            (fontname, size, color_rgb01, bold, italic, baseline_y, first_x,
+             multiline)
+
+        ``baseline_y`` and ``first_x`` let us redraw single-line edits on the
+        original baseline instead of inside a generic textbox. That makes the
+        replacement much less "messy" and keeps it aligned with the original
+        PDF text.
+        """
         try:
             d = page.get_text("dict")
-            best = None
+            candidates = []
             for block in d.get("blocks", []):
+                if block.get("type") != 0:
+                    continue
                 for line in block.get("lines", []):
+                    line_bbox = fitz.Rect(line.get("bbox", rect))
+                    if not line_bbox.intersects(rect + (-2, -2, 2, 2)):
+                        continue
+                    spans = []
                     for span in line.get("spans", []):
-                        sb = fitz.Rect(span["bbox"])
-                        # does this span sit inside the clicked line area?
-                        if (sb.y0 >= rect.y0 - 3 and sb.y1 <= rect.y1 + 3 and
-                                sb.x1 > rect.x0 - 3 and sb.x0 < rect.x1 + 3):
-                            # Prefer the LARGEST font in the region (so a
-                            # heading's size wins), then the widest span.
-                            span_size = span.get("size", 0)
-                            score = (round(span_size, 1), sb.width)
-                            if best is None or score > best[0]:
-                                col = span.get("color", 0)
-                                r = ((col >> 16) & 255) / 255.0
-                                g = ((col >> 8) & 255) / 255.0
-                                b = (col & 255) / 255.0
-                                fontname = span.get("font", "")
-                                # PyMuPDF span "flags": bit 4 (16) = bold,
-                                # bit 1 (2) = italic. Also check the font name.
-                                flags = span.get("flags", 0)
-                                nm = fontname.lower()
-                                bold = bool(flags & 16) or "bold" in nm \
-                                    or "black" in nm or "heavy" in nm \
-                                    or "semibold" in nm
-                                italic = bool(flags & 2) or "italic" in nm \
-                                    or "oblique" in nm
-                                best = (score, fontname,
-                                        span.get("size", 0), (r, g, b),
-                                        bold, italic)
-            if best:
-                return best[1], best[2], best[3], best[4], best[5]
+                        text = span.get("text", "")
+                        if not text.strip():
+                            continue
+                        sb = fitz.Rect(span.get("bbox", rect))
+                        # overlap with the clicked/edit rectangle
+                        if not sb.intersects(rect + (-3, -3, 3, 3)):
+                            continue
+                        spans.append(span)
+                    if not spans:
+                        continue
+                    # Prefer the span with the largest visual size.
+                    primary = max(spans, key=lambda sp: (sp.get("size", 0),
+                                                         fitz.Rect(sp.get("bbox", rect)).width))
+                    col = primary.get("color", 0)
+                    rgb = (((col >> 16) & 255) / 255.0,
+                           ((col >> 8) & 255) / 255.0,
+                           (col & 255) / 255.0)
+                    fontname = primary.get("font", "")
+                    flags = primary.get("flags", 0)
+                    nm = fontname.lower()
+                    bold = bool(flags & 16) or "bold" in nm or "black" in nm \
+                        or "heavy" in nm or "semibold" in nm
+                    italic = bool(flags & 2) or "italic" in nm or "oblique" in nm
+                    origin = primary.get("origin") or (fitz.Rect(primary.get("bbox", rect)).x0,
+                                                        fitz.Rect(primary.get("bbox", rect)).y1)
+                    try:
+                        ox, oy = float(origin[0]), float(origin[1])
+                    except Exception:
+                        ox, oy = line_bbox.x0, line_bbox.y1
+                    score = (primary.get("size", 0), line_bbox.width)
+                    candidates.append((score, fontname, primary.get("size", 0),
+                                       rgb, bold, italic, oy, ox, False))
+            if candidates:
+                best = max(candidates, key=lambda item: item[0])
+                return best[1], best[2], best[3], best[4], best[5], best[6], best[7], best[8]
         except Exception:
             pass
-        return None, None, None, False, False
+        return None, None, None, False, False, None, None, False
+
+    def _background_color_for_rect(self, page, rect):
+        """Best-effort background color behind an edited line.
+
+        Older code always painted white over the original text. On off-white,
+        gray, colored, or screenshot-like pages that creates an obvious box.
+        We sample a small area around the line and use a bright/neutral median
+        color, falling back to white if sampling fails.
+        """
+        try:
+            # Render a small clipped area around the line. 2x scale is enough
+            # for a stable sample but still very fast.
+            clip = fitz.Rect(rect.x0 - 3, rect.y0 - 3, rect.x1 + 3, rect.y1 + 3)
+            clip &= page.rect
+            if clip.is_empty:
+                return (1, 1, 1)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=clip, alpha=False)
+            data = pix.samples
+            if not data:
+                return (1, 1, 1)
+            # Sample every few pixels. Prefer bright pixels because the text
+            # itself is usually dark and should not influence the fill color.
+            vals = []
+            step = max(3, pix.n * 8)
+            for i in range(0, len(data) - pix.n + 1, step):
+                r, g, b = data[i], data[i + 1], data[i + 2]
+                if (r + g + b) / 3 >= 160:  # likely background, not text
+                    vals.append((r, g, b))
+            if not vals:
+                vals = [(data[i], data[i + 1], data[i + 2])
+                        for i in range(0, len(data) - pix.n + 1, step)]
+            if not vals:
+                return (1, 1, 1)
+            vals.sort(key=lambda c: c[0] + c[1] + c[2])
+            r, g, b = vals[len(vals) // 2]
+            return (r / 255.0, g / 255.0, b / 255.0)
+        except Exception:
+            return (1, 1, 1)
 
     def _usable_font(self, font_name):
         """Turn a detected font name into one PyMuPDF can actually write with.
@@ -114,76 +175,244 @@ class PDFDocument:
         # otherwise map by style (serif/bold/italic/mono)
         return _builtin_font_for(font_name)
 
+
+    def _line_text_and_metrics(self, page, rect):
+        """Return best-effort visual text and geometry for the clicked line.
+
+        This is used for *small corrections*.  Instead of redrawing the whole
+        line (which changes the whole line font), we find the changed part of
+        the typed text and cover/redraw only that part.  The unchanged letters
+        stay as the original PDF content, so their exact original font is kept.
+        """
+        try:
+            d = page.get_text("dict")
+            best = None
+            best_score = -1
+            search = rect + (-3, -3, 3, 3)
+            for block in d.get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    lb = fitz.Rect(line.get("bbox", rect))
+                    if not lb.intersects(search):
+                        continue
+                    spans = []
+                    for sp in line.get("spans", []):
+                        txt = sp.get("text", "")
+                        if not txt:
+                            continue
+                        sb = fitz.Rect(sp.get("bbox", lb))
+                        if sb.intersects(search):
+                            spans.append(sp)
+                    if not spans:
+                        continue
+                    text = "".join(sp.get("text", "") for sp in spans)
+                    if not text.strip():
+                        continue
+                    overlap = max(0, min(lb.y1, rect.y1) - max(lb.y0, rect.y0))
+                    score = overlap * max(1, min(lb.x1, rect.x1) - max(lb.x0, rect.x0))
+                    if score > best_score:
+                        best_score = score
+                        best = (text, lb, spans)
+            return best
+        except Exception:
+            return None
+
+    def _common_change_region(self, old_text: str, new_text: str):
+        """Return (start, old_end, replacement) for the changed section."""
+        old_text = old_text or ""
+        new_text = new_text or ""
+        i = 0
+        max_i = min(len(old_text), len(new_text))
+        while i < max_i and old_text[i] == new_text[i]:
+            i += 1
+        j_old = len(old_text)
+        j_new = len(new_text)
+        while j_old > i and j_new > i and old_text[j_old - 1] == new_text[j_new - 1]:
+            j_old -= 1
+            j_new -= 1
+        return i, j_old, new_text[i:j_new]
+
+    def _try_small_text_patch(self, page, rect, old_text, new_text, style, fill):
+        """Patch only the changed part of a line and leave the rest untouched.
+
+        Returns True if the small patch was applied.  This is the closest safe
+        behaviour to normal PDF editors for small typo fixes.
+        """
+        if not old_text or not new_text or "\n" in new_text:
+            return False
+        old_norm = old_text.strip("\n")
+        new_norm = new_text.strip("\n")
+        if not old_norm or old_norm == new_norm:
+            return False
+
+        # Small patch mode uses baseline insert_text. That is good for Latin/CJK
+        # typo fixes, but it breaks shaped scripts such as Bangla, Hindi, Arabic,
+        # Thai, etc. For those languages, use the full-line draw_text path so
+        # glyph joining and conjuncts render correctly.
+        try:
+            from utils.fonts import is_complex_script
+            if is_complex_script(old_norm) or is_complex_script(new_norm):
+                return False
+        except Exception:
+            pass
+
+        start, old_end, repl = self._common_change_region(old_norm, new_norm)
+        if start == old_end and not repl:
+            return False
+
+        # Only use small-patch mode for small corrections.  If the user rewrites
+        # most of the line, full-line overlay is safer and clearer.
+        changed_old = max(1, old_end - start)
+        changed_new = max(1, len(repl))
+        if changed_old > max(14, len(old_norm) * 0.45) or changed_new > max(18, len(old_norm) * 0.55):
+            return False
+
+        det_font, det_size, det_color, det_bold, det_italic, baseline_y, first_x = style
+        size = float(det_size or max(8.0, min(48.0, rect.height * 0.82)))
+        rgb = det_color or (0, 0, 0)
+        fname = self._usable_font(det_font) if det_font else "helv"
+
+        # Estimate horizontal character positions.  This is intentionally
+        # conservative: cover a tiny bit more around the changed part, but do
+        # not touch the full line.
+        n = max(1, len(old_norm))
+        x0 = rect.x0 + rect.width * (start / n)
+        x1 = rect.x0 + rect.width * (old_end / n)
+        min_w = max(size * 0.55, 3)
+        if x1 - x0 < min_w:
+            x1 = x0 + min_w
+        patch = fitz.Rect(x0 - 1.2, rect.y0 - 0.8, min(rect.x1 + 3, x1 + 2.0), rect.y1 + 0.8) & page.rect
+        page.draw_rect(patch, color=fill, fill=fill, width=0, overlay=True)
+
+        if repl:
+            try:
+                from utils.fonts import font_for_page, _styled_builtin
+                fn, ff = font_for_page(page, repl, fname)
+                if ff is None and fn in ("helv", "tiro", "cour"):
+                    fn = _styled_builtin(fn, det_bold, det_italic)
+                y = (rect.y0 + size) if baseline_y is None else float(baseline_y)
+                y = min(max(y, rect.y0 + size * 0.65), rect.y1 + size * 0.15)
+                page.insert_text((max(page.rect.x0 + 1, x0), y), repl,
+                                 fontname=fn, fontfile=ff, fontsize=size,
+                                 color=rgb, overlay=True)
+            except Exception:
+                try:
+                    page.insert_text((max(page.rect.x0 + 1, x0), rect.y1 - 2), repl,
+                                     fontsize=size, color=rgb, overlay=True)
+                except Exception:
+                    return False
+        return True
+
     def edit_line_in_memory(self, page_index: int, line_bbox: tuple,
                             new_text: str, font_size=None, font_hint="",
                             color_hex="#000000") -> dict:
-        """Replace the text in a line, editing the OPEN document in memory.
+        """Replace a line with a cleaner PDF-editor style overlay.
 
-        Does NOT save to disk — it just changes the in-memory document and
-        marks it dirty, so the user is only asked to save when they close.
-        Call push_undo() before this to allow undo.
+        This is still not true Word-style PDF reflow (PDFs do not store text in
+        that way), but it is much cleaner than the old method because it:
+
+        * samples the real page background instead of always drawing a white box;
+        * redraws single-line edits on the original baseline;
+        * keeps original font size, color, bold and italic where possible;
+        * uses a tight erase rectangle so nearby equations/figures are not hit.
         """
         from core.text_line_editor import _hex_to_rgb01, _builtin_font_for
         if page_index < 0 or page_index >= self.doc.page_count:
             raise IndexError("Page out of range")
         page = self.doc[page_index]
         rect = fitz.Rect(*line_bbox)
+        if rect.is_empty:
+            return {"changed": False, "page": page_index + 1}
 
-        # Read the ORIGINAL font, size and color FIRST (before we erase), so
-        # the edit keeps the same look — this is how Sejda avoids changing the
-        # style. We only fall back to a generic font if detection fails.
-        det_font, det_size, det_color, det_bold, det_italic = \
+        # Read style before covering anything.
+        det_font, det_size, det_color, det_bold, det_italic, baseline_y, first_x, _multi = \
             self._detect_line_style(page, rect)
+        fill = self._background_color_for_rect(page, rect)
 
-        # white-out the old text
-        page.add_redact_annot(rect, fill=(1, 1, 1))
-        page.apply_redactions()
+        # Best fix for font/style changes: for small typo corrections, do NOT
+        # redraw the whole line.  Patch only the changed letters/word and leave
+        # all other original PDF glyphs untouched.
+        metrics = self._line_text_and_metrics(page, rect)
+        if metrics:
+            old_text, _line_rect, _spans = metrics
+            style = (det_font, det_size, det_color, det_bold, det_italic, baseline_y, first_x)
+            if self._try_small_text_patch(page, rect, old_text, new_text, style, fill):
+                self._dirty = True
+                return {"changed": True, "page": page_index + 1, "new_text": new_text, "mode": "small_patch"}
+
+        # Full-line fallback.  This is necessary when the user rewrites most of
+        # the line.  It keeps size/color/style as close as PyMuPDF can, but it
+        # cannot always reuse a subset-embedded PDF font.
+        cover = fitz.Rect(rect.x0 - 0.6, rect.y0 - 0.6,
+                          rect.x1 + 0.8, rect.y1 + 0.8) & page.rect
+        page.draw_rect(cover, color=fill, fill=fill, width=0, overlay=True)
 
         if new_text:
-            # color: keep original unless the caller asked for a specific one
+            # Color: keep original unless the user intentionally chose another.
             if color_hex and color_hex.lower() not in ("#000000", "", None):
                 rgb = _hex_to_rgb01(color_hex)
             elif det_color is not None:
                 rgb = det_color
             else:
                 rgb = _hex_to_rgb01(color_hex)
-            # font: reuse the detected one; fall back to hint/style
-            fname = self._usable_font(det_font) if det_font \
-                else _builtin_font_for(font_hint)
-            # size: the size read directly from the document (det_size) is the
-            # most reliable. A caller may pass font_size from a UI cache, but
-            # if it disagrees a lot with what's actually on the page, trust the
-            # document — this is what stops headings collapsing to body size.
+
+            fname = self._usable_font(det_font) if det_font else _builtin_font_for(font_hint)
             if det_size and det_size > 0:
                 if font_size and abs(font_size - det_size) <= 1.5:
-                    size = font_size      # close enough, honour caller
+                    size = float(font_size)
                 else:
-                    size = det_size       # trust the real on-page size
+                    size = float(det_size)
             else:
-                size = (font_size
-                        or max(8.0, min(48.0, rect.height * 0.85)))
-            # Give the text room: let it extend to the right page edge and a
-            # little below, so longer replacement text still fits.
+                size = float(font_size or max(8.0, min(48.0, rect.height * 0.82)))
+
+            # Draw simple one-line replacements at the original text baseline.
+            # This avoids the vertical drift caused by insert_textbox.
+            single_line = "\n" not in new_text and len(new_text) < 180
             page_rect = page.rect
-            box = fitz.Rect(rect.x0, rect.y0,
-                            min(page_rect.x1 - 4, rect.x0 + rect.width * 4),
-                            rect.y1 + size * 2)
-            # Draw via the shared helper: it auto-detects the script, shapes
-            # complex scripts correctly, and KEEPS the original size, color and
-            # bold/italic so a heading stays a heading after editing.
             try:
-                from utils.fonts import draw_text
-                draw_text(page, box, new_text, size, color=rgb,
-                          default_font=fname, align=0,
-                          bold=det_bold, italic=det_italic)
+                from utils.fonts import detect_script, font_for_page, draw_text
+                complex_script = detect_script(new_text) in {"bangla", "devanagari", "arabic", "thai"}
             except Exception:
-                # extreme fallback — never let the line vanish
+                complex_script = False
+
+            if single_line and not complex_script:
                 try:
-                    page.insert_textbox(box, new_text, fontname=fname,
-                                        fontsize=size, color=rgb, align=0)
+                    from utils.fonts import font_for_page, _styled_builtin
+                    fn, ff = font_for_page(page, new_text, fname)
+                    if ff is None and fn in ("helv", "tiro", "cour"):
+                        fn = _styled_builtin(fn, det_bold, det_italic)
+                    x = rect.x0 if first_x is None else max(page_rect.x0 + 1, float(first_x))
+                    y = (rect.y0 + size) if baseline_y is None else float(baseline_y)
+                    # Keep the text visually inside the edited line.
+                    y = min(max(y, rect.y0 + size * 0.65), rect.y1 + size * 0.15)
+                    page.insert_text((x, y), new_text, fontname=fn, fontfile=ff,
+                                     fontsize=size, color=rgb, overlay=True)
+                except Exception:
+                    # Fallback to boxed text if baseline writing fails.
+                    box = fitz.Rect(rect.x0, rect.y0,
+                                    min(page_rect.x1 - 4, rect.x0 + max(rect.width * 2.5, 180)),
+                                    rect.y1 + size * 0.65)
+                    from utils.fonts import draw_text
+                    draw_text(page, box, new_text, size, color=rgb,
+                              default_font=fname, align=0,
+                              bold=det_bold, italic=det_italic)
+            else:
+                # Longer or multi-line replacement: use a controlled text box.
+                # It may wrap, but it should no longer shrink headings or erase
+                # a very large block of content.
+                box = fitz.Rect(rect.x0, rect.y0,
+                                min(page_rect.x1 - 4, rect.x0 + max(rect.width * 2.2, 220)),
+                                min(page_rect.y1 - 2, rect.y0 + max(rect.height * 1.6, size * 2.2)))
+                try:
+                    from utils.fonts import draw_text
+                    draw_text(page, box, new_text, size, color=rgb,
+                              default_font=fname, align=0,
+                              bold=det_bold, italic=det_italic)
                 except Exception:
                     page.insert_text((rect.x0, rect.y1 - 2), new_text,
-                                     fontsize=10, color=rgb)
+                                     fontsize=min(size, 10), color=rgb,
+                                     overlay=True)
         self._dirty = True
         return {"changed": True, "page": page_index + 1, "new_text": new_text}
 
@@ -458,7 +687,7 @@ class PDFDocument:
         """Save the PDF. If output_path is None, save in place."""
         target = output_path or self.path
         # Stamp the producer so saved files show this app - a clean,
-        # professional touch with no third-party footprint.
+        # professional touch.
         try:
             from utils.constants import APP_NAME, APP_VERSION
             md = self.doc.metadata or {}

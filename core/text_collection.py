@@ -3,7 +3,7 @@
 When the user selects/highlights text, a snippet is saved together with the
 page number, paper title, and source file, so a literature-review note stays
 connected to where it came from. Can jump back to the exact spot, export to
-Excel, and reopen later. No AI, fully offline.
+Excel, and reopen later. Fully offline.
 """
 
 import re

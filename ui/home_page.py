@@ -69,16 +69,16 @@ def _relative_date(ts: float) -> str:
 def _palette(is_dark: bool) -> dict:
     if is_dark:
         return dict(
-            page_bg="#1E1E22", panel_bg="#26262B", text="#ECECEF",
-            muted="#9A9AA2", sidebar_bg="#202024", sidebar_sel="#34343C",
-            line="#34343A", accent="#5B8CFF", card_text="#FFFFFF",
-            row_hover="#2C2C32", header="#8A8A92",
+            page_bg="#0B1220", panel_bg="#101827", text="#F8FAFC",
+            muted="#CBD5E1", sidebar_bg="#101827", sidebar_sel="#172033",
+            line="#263244", accent="#60A5FA", card_text="#FFFFFF",
+            row_hover="#172033", header="#CBD5E1",
         )
     return dict(
-        page_bg="#FFFFFF", panel_bg="#FFFFFF", text="#1F1F24",
-        muted="#6B6B72", sidebar_bg="#FFFFFF", sidebar_sel="#ECECF1",
-        line="#E7E7EB", accent="#2667FF", card_text="#FFFFFF",
-        row_hover="#F4F4F7", header="#8A8A92",
+        page_bg="#F4F7FB", panel_bg="#FFFFFF", text="#172033",
+        muted="#667085", sidebar_bg="#FFFFFF", sidebar_sel="#EEF4FF",
+        line="#DDE5F0", accent="#2563EB", card_text="#FFFFFF",
+        row_hover="#F6F9FE", header="#667085",
     )
 
 
@@ -94,7 +94,7 @@ class FeatureCard(QFrame):
         self.setMinimumHeight(150)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setStyleSheet(
-            f"FeatureCard {{ border-radius: 12px; background: {gradient}; }}")
+            f"FeatureCard {{ border-radius: 18px; background: {gradient}; }}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
         lay.addStretch(1)
@@ -149,10 +149,10 @@ class HomePage(QWidget):
         weight = "600" if selected else "500"
         color = p["text"] if handler else p["muted"]
         b.setStyleSheet(
-            f"QPushButton {{ text-align:left; padding:8px {indent}px;"
-            f" border:none; border-radius:8px; background:{bg};"
+            f"QPushButton {{ text-align:left; padding:9px {indent}px;"
+            f" border:1px solid transparent; border-radius:10px; background:{bg};"
             f" color:{color}; font-size:13px; font-weight:{weight}; }}"
-            f"QPushButton:hover {{ background:{p['sidebar_sel']}; }}"
+            f"QPushButton:hover {{ background:{p['sidebar_sel']}; border-color:{p['line']}; }}"
             f"QPushButton:disabled {{ color:{p['muted']}; }}")
         if handler:
             b.clicked.connect(lambda: handler())
@@ -168,11 +168,11 @@ class HomePage(QWidget):
     def _build_sidebar(self):
         p = self._pal
         wrap = QFrame()
-        wrap.setFixedWidth(212)
+        wrap.setFixedWidth(224)
         wrap.setStyleSheet(
             f"background:{p['sidebar_bg']}; border-right:1px solid {p['line']};")
         lay = QVBoxLayout(wrap)
-        lay.setContentsMargins(8, 12, 8, 12)
+        lay.setContentsMargins(10, 14, 10, 14)
         lay.setSpacing(2)
 
         lay.addWidget(self._side_item(tr("Recent"), self._noop, selected=True))
@@ -206,7 +206,7 @@ class HomePage(QWidget):
         inner = QWidget()
         inner.setStyleSheet(f"background:{p['page_bg']};")
         col = QVBoxLayout(inner)
-        col.setContentsMargins(32, 24, 32, 24)
+        col.setContentsMargins(36, 28, 36, 28)
         col.setSpacing(18)
 
         # greeting
@@ -236,11 +236,11 @@ class HomePage(QWidget):
     def _build_hero(self):
         p = self._pal
         hero = QFrame()
-        hero.setMinimumHeight(120)
+        hero.setMinimumHeight(132)
         hero.setStyleSheet(
-            "QFrame { border-radius:14px; background:"
+            "QFrame { border-radius:20px; background:"
             " qlineargradient(x1:0, y1:0, x2:1, y2:1,"
-            " stop:0 #5468FF, stop:0.6 #8A4FFF, stop:1 #C04BD8); }")
+            " stop:0 #1D4ED8, stop:0.55 #4F46E5, stop:1 #7C3AED); }")
         lay = QHBoxLayout(hero)
         lay.setContentsMargins(24, 18, 24, 18)
         textcol = QVBoxLayout()

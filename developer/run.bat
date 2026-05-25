@@ -6,7 +6,7 @@ REM  You can also drag-and-drop a PDF onto this file to open it.
 REM ============================================================
 
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 REM If the real built program exists, use it (best).
 if exist "app_exe\MasumPDFReader.exe" (

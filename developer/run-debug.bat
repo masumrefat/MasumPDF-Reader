@@ -7,7 +7,7 @@ REM  nothing when you double-click it.
 REM ============================================================
 
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 if not exist ".venv\Scripts\python.exe" (
     echo  No virtual environment found. Run install.bat first.

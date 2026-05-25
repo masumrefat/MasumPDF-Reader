@@ -4,8 +4,11 @@ from PySide6.QtWidgets import (
     QToolBar, QToolButton, QLineEdit, QLabel, QComboBox,
     QWidget, QHBoxLayout, QPushButton, QSizePolicy, QFrame,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QAction, QIcon, QKeySequence
+from ui.icons import make_icon
+
+TOOLBAR_ICON_SIZE = 18
 
 
 def _make_action(parent, text: str, shortcut: str = "", tooltip: str = ""):
@@ -47,6 +50,8 @@ class MainToolbar(QToolBar):
     annotate_highlight_requested = Signal()
     annotate_note_requested = Signal()
     theme_toggle_requested = Signal()
+    color_theme_changed = Signal(str)
+    app_theme_changed = Signal(str, str)  # appearance, accent color
     properties_requested = Signal()
     compress_requested = Signal()
     compare_requested = Signal()
@@ -61,60 +66,82 @@ class MainToolbar(QToolBar):
     mark_reference_requested = Signal()
     save_note_requested = Signal()
     language_changed = Signal(str)
+    home_requested = Signal()
+    tools_bar_toggle_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__("Main toolbar", parent)
         self.setMovable(False)
-        self.setIconSize(self.iconSize())
+        self.setFloatable(False)
+        self.setMinimumHeight(34)
+        self.setMaximumHeight(38)
+        self.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
 
         self._build()
 
-    def _add_btn(self, text: str, tooltip: str, signal):
+    def _add_btn(self, text: str, tooltip: str, signal, min_width: int = 0, icon: str | None = None):
         b = QToolButton()
+        b.setObjectName("QuickActionButton")
         b.setText(text)
         b.setToolTip(tooltip)
-        b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        if icon:
+            b.setIcon(make_icon(icon, "#1F2937", TOOLBAR_ICON_SIZE))
+            b.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
+            b.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        else:
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        b.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        b.setMinimumHeight(28)
+        if min_width:
+            b.setMinimumWidth(min_width)
         b.clicked.connect(lambda: signal.emit())
         self.addWidget(b)
         return b
 
     def _add_sep(self):
         s = QFrame()
+        s.setObjectName("ToolbarSeparator")
         s.setFrameShape(QFrame.VLine)
-        s.setStyleSheet("color: #C0C0C6;")
         s.setFixedHeight(22)
         self.addWidget(s)
 
     def _build(self):
-        # File
-        self._add_btn("Open", "Open a PDF (Ctrl+O)", self.open_requested)
-        self._add_btn("Save", "Save (Ctrl+S)", self.save_requested)
-        self._add_btn("Save As", "Save a copy", self.save_as_requested)
+        # Navigation / File — compact labels so nothing is clipped.
+        self._add_btn("Home", "Go to the Home screen", self.home_requested, 76, "home")
+        self._add_btn("Open", "Open a PDF (Ctrl+O)", self.open_requested, 68, "open")
+        self._add_btn("Save", "Save (Ctrl+S)", self.save_requested, 66, "save")
+        self._add_btn("Save As", "Save a copy", self.save_as_requested, 70)
 
         self._add_sep()
 
         # Zoom
-        self._add_btn("−", "Zoom out (Ctrl+−)", self.zoom_out_requested)
+        self._add_btn("", "Zoom out (Ctrl+−)", self.zoom_out_requested, 40, "zoom_out")
         self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("ZoomLabel")
         self.zoom_label.setMinimumWidth(48)
         self.zoom_label.setAlignment(Qt.AlignCenter)
         self.addWidget(self.zoom_label)
-        self._add_btn("+", "Zoom in (Ctrl++)", self.zoom_in_requested)
-        self._add_btn("Fit W", "Fit width", self.fit_width_requested)
-        self._add_btn("Fit", "Fit page", self.fit_page_requested)
+        self._add_btn("", "Zoom in (Ctrl++)", self.zoom_in_requested, 40, "zoom_in")
+        self._add_btn("Fit W", "Fit width", self.fit_width_requested, 56)
+        self._add_btn("Fit", "Fit page", self.fit_page_requested, 46)
 
         self._add_sep()
 
         # View mode
         self.view_mode_combo = QComboBox()
+        self.view_mode_combo.setObjectName("ViewModeCombo")
         self.view_mode_combo.addItems(["Continuous", "Single page", "Two pages"])
         self.view_mode_combo.setToolTip("View mode")
+        self.view_mode_combo.setMinimumWidth(120)
+        self.view_mode_combo.setMaximumWidth(150)
         self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode)
         self.addWidget(self.view_mode_combo)
 
         # Rotate
         rotate_btn = QToolButton()
-        rotate_btn.setText("↻")
+        rotate_btn.setText("")
+        rotate_btn.setIcon(make_icon("rotate_right", "#1F2937", TOOLBAR_ICON_SIZE))
+        rotate_btn.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         rotate_btn.setToolTip("Rotate view 90°")
         rotate_btn.clicked.connect(lambda: self.rotate_requested.emit(90))
         self.addWidget(rotate_btn)
@@ -125,7 +152,10 @@ class MainToolbar(QToolBar):
         # These toggle "modes": when ON, dragging over text on the page
         # saves it (as a reference, or as a note) instead of just copying.
         self.mark_ref_btn = QToolButton()
-        self.mark_ref_btn.setText("\u2605  Collect Reference")
+        self.mark_ref_btn.setObjectName("CollectButton")
+        self.mark_ref_btn.setText("Reference")
+        self.mark_ref_btn.setIcon(make_icon("reference", "#1F2937", TOOLBAR_ICON_SIZE))
+        self.mark_ref_btn.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         self.mark_ref_btn.setToolTip(
             "Mark & collect references.\n"
             "When ON, drag over a reference in the bibliography to save it "
@@ -136,7 +166,10 @@ class MainToolbar(QToolBar):
         self.addWidget(self.mark_ref_btn)
 
         self.save_note_btn = QToolButton()
-        self.save_note_btn.setText("\U0001F4DD  Save Text as Note")
+        self.save_note_btn.setObjectName("CollectButton")
+        self.save_note_btn.setText("Note")
+        self.save_note_btn.setIcon(make_icon("note", "#1F2937", TOOLBAR_ICON_SIZE))
+        self.save_note_btn.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         self.save_note_btn.setToolTip(
             "Save selected text as a note.\n"
             "When ON, drag over any text to save it as a note with its "
@@ -146,6 +179,46 @@ class MainToolbar(QToolBar):
         self.save_note_btn.clicked.connect(self.save_note_requested.emit)
         self.addWidget(self.save_note_btn)
 
+        self._add_sep()
+
+        # ---- Interface language selector: highlighted and always visible ----
+        # Keep it before the flexible spacer so it cannot disappear at the far
+        # right of the toolbar.
+        from utils.i18n import tr
+        self.lang_badge = QLabel(" Language ")
+        self.lang_badge.setObjectName("LanguageBadge")
+        self.lang_badge.setToolTip(tr("Interface language"))
+        self.addWidget(self.lang_badge)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setObjectName("LanguageCombo")
+        self.lang_combo.setToolTip(tr("Change interface language immediately"))
+        self._populate_language_combo()
+        self.lang_combo.currentIndexChanged.connect(self._on_language)
+        self.addWidget(self.lang_combo)
+
+        self.hide_tools_btn = QToolButton()
+        self.hide_tools_btn.setObjectName("HideToolsButton")
+        self.hide_tools_btn.setText("Hide Tools")
+        self.hide_tools_btn.setToolTip("Auto-hide the large tools bar and keep a small top bar")
+        self.hide_tools_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.hide_tools_btn.clicked.connect(self.tools_bar_toggle_requested.emit)
+        self.addWidget(self.hide_tools_btn)
+
+        # ---- Highlighted theme button ----
+        # Click opens Light/Dark + color choices. This is intentionally a big
+        # visible top-bar control so users can find customization immediately.
+        self.theme_btn = QToolButton()
+        self.theme_btn.setObjectName("ThemeButton")
+        self.theme_btn.setText("Theme")
+        self.theme_btn.setIcon(make_icon("theme", "#1F2937", TOOLBAR_ICON_SIZE))
+        self.theme_btn.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
+        self.theme_btn.setToolTip("Choose Light/Dark mode and app color")
+        self.theme_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.theme_btn.setPopupMode(QToolButton.InstantPopup)
+        self.addWidget(self.theme_btn)
+        self._build_theme_menu()
+
         # spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -153,50 +226,19 @@ class MainToolbar(QToolBar):
 
         # Search
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search in document…")
-        self.search_input.setMinimumWidth(150)
-        self.search_input.setMaximumWidth(220)
+        self.search_input.setObjectName("GlobalSearch")
+        self.search_input.setPlaceholderText("Find text, tools, or help")
+        self.search_input.setMinimumWidth(190)
+        self.search_input.setMaximumWidth(280)
         self.search_input.textChanged.connect(self.search_text_changed.emit)
         self.search_input.returnPressed.connect(self.search_next_requested.emit)
         self.addWidget(self.search_input)
-        self._add_btn("↑", "Previous result", self.search_prev_requested)
-        self._add_btn("↓", "Next result", self.search_next_requested)
+        self._add_btn("", "Previous result", self.search_prev_requested, 36, "arrow_up")
+        self._add_btn("", "Next result", self.search_next_requested, 36, "arrow_down")
 
         self._add_sep()
 
-        self._add_btn("Info", "Document properties", self.properties_requested)
-        self._add_btn("Theme", "Toggle dark/light theme", self.theme_toggle_requested)
-
-        self._add_sep()
-
-        # ---- Interface language selector (clearly visible on the top bar) ----
-        # Kept compact (globe + short name) so it always fits on the bar; the
-        # full language name shows in the tooltip and in the dropdown list.
-        from utils.i18n import available_languages, current_language, tr
-        globe = QLabel(" \U0001F310")   # 🌐
-        globe.setToolTip(tr("Interface language"))
-        self.addWidget(globe)
-        self.lang_combo = QComboBox()
-        self.lang_combo.setToolTip(tr("Interface language"))
-        # short labels in the closed box, full names in the popup list
-        short = {
-            "en": "EN", "bn": "বাংলা", "es": "ES", "ar": "العربية",
-            "hi": "हिन्दी", "ja": "日本語", "zh": "中文", "de": "DE",
-        }
-        for code, name in available_languages().items():
-            # itemText is the full name (shown in the list); we override the
-            # displayed text of the current item via setCurrentText-like trick
-            self.lang_combo.addItem(name, code)
-        self.lang_combo.setMinimumWidth(96)
-        self.lang_combo.setMaximumWidth(150)
-        self._lang_short = short
-        cur = current_language()
-        for i in range(self.lang_combo.count()):
-            if self.lang_combo.itemData(i) == cur:
-                self.lang_combo.setCurrentIndex(i)
-                break
-        self.lang_combo.currentIndexChanged.connect(self._on_language)
-        self.addWidget(self.lang_combo)
+        self._add_btn("Info", "Document properties", self.properties_requested, 50)
 
         # ---- Legacy checkable button attributes ----
         # The All Tools panel now owns all editing tools, but some code in
@@ -214,6 +256,92 @@ class MainToolbar(QToolBar):
     def _on_view_mode(self, idx):
         mapping = {0: "continuous", 1: "single", 2: "two_page"}
         self.view_mode_changed.emit(mapping.get(idx, "continuous"))
+
+    def _populate_language_combo(self):
+        """Fill the highlighted language dropdown without emitting changes."""
+        from utils.i18n import available_languages, current_language
+        self.lang_combo.blockSignals(True)
+        self.lang_combo.clear()
+        for code, name in available_languages().items():
+            # Keep both code and full name visible so users notice it.
+            self.lang_combo.addItem(f"{code.upper()} — {name}", code)
+        self.lang_combo.setMinimumWidth(132)
+        self.lang_combo.setMaximumWidth(178)
+        cur = current_language()
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == cur:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.blockSignals(False)
+
+    def refresh_language_selector(self):
+        """Update the dropdown after language changes are applied live."""
+        try:
+            from utils.i18n import tr
+            self.lang_badge.setToolTip(tr("Interface language"))
+            self.lang_combo.setToolTip(tr("Change interface language immediately"))
+            self._populate_language_combo()
+        except Exception:
+            pass
+
+    def _build_theme_menu(self):
+        from PySide6.QtWidgets import QMenu
+        from utils.constants import COLOR_THEMES, APPEARANCES
+        try:
+            from utils.settings import AppSettings
+            st = AppSettings()
+            current_color = st.theme()
+            current_appearance = st.appearance()
+        except Exception:
+            current_color = "blue"
+            current_appearance = "light"
+
+        menu = QMenu(self.theme_btn)
+
+        appearance_menu = menu.addMenu("Mode")
+        for code, name in APPEARANCES.items():
+            act = appearance_menu.addAction(("✓ " if code == current_appearance else "   ") + name)
+            act.triggered.connect(lambda checked=False, a=code: self.app_theme_changed.emit(a, current_color))
+
+        color_menu = menu.addMenu("Color")
+        swatches = {
+            "blue": "●", "green": "●", "purple": "●",
+            "orange": "●", "rose": "●", "graphite": "●",
+        }
+        for code, name in COLOR_THEMES.items():
+            label = f"{swatches.get(code, '●')} {name}"
+            if code == current_color:
+                label = "✓ " + label
+            else:
+                label = "   " + label
+            act = color_menu.addAction(label)
+            act.triggered.connect(lambda checked=False, c=code: self.app_theme_changed.emit(current_appearance, c))
+
+        menu.addSeparator()
+        for appearance, color, label in (
+            ("light", "blue", "Light Ocean Blue"),
+            ("dark", "blue", "Dark Ocean Blue"),
+            ("light", "green", "Light Research Green"),
+            ("dark", "green", "Dark Research Green"),
+            ("light", "purple", "Light Royal Purple"),
+            ("dark", "purple", "Dark Royal Purple"),
+        ):
+            act = menu.addAction(label)
+            act.triggered.connect(lambda checked=False, a=appearance, c=color: self.app_theme_changed.emit(a, c))
+
+        self.theme_btn.setMenu(menu)
+        mode = "Dark" if current_appearance == "dark" else "Light"
+        self.theme_btn.setText(f"Theme: {mode}")
+
+    def refresh_color_selector(self):
+        try:
+            self._build_theme_menu()
+        except Exception:
+            pass
+
+    def _on_color_theme(self, idx):
+        # Backward-compatible no-op hook for older code paths.
+        pass
 
     def _on_language(self, idx):
         code = self.lang_combo.itemData(idx)

@@ -289,6 +289,35 @@ class ResearchLibrary:
                                       if p != pdf_path]
             self.save()
 
+    def collections_for_item(self, pdf_path: str) -> list:
+        """Return all user collections containing this library item."""
+        return sorted([name for name, paths in self.collections.items()
+                       if pdf_path in paths], key=str.lower)
+
+    def set_item_collections(self, pdf_path: str, collection_names: list):
+        """Assign an item to exactly the selected user collections.
+
+        The item itself is not deleted. New collection names are created
+        automatically, so users can make a collection while assigning an item.
+        """
+        if pdf_path not in self.papers:
+            return
+        cleaned = []
+        seen = set()
+        for name in collection_names or []:
+            name = str(name).strip()
+            if name and name.lower() not in seen:
+                cleaned.append(name)
+                seen.add(name.lower())
+                self.collections.setdefault(name, [])
+        for name in list(self.collections.keys()):
+            if name in cleaned:
+                if pdf_path not in self.collections[name]:
+                    self.collections[name].append(pdf_path)
+            else:
+                self.collections[name] = [p for p in self.collections[name] if p != pdf_path]
+        self.save()
+
     # ---------- queries ----------
     def all_papers(self) -> list:
         return list(self.papers.values())

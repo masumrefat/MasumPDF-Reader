@@ -2,6 +2,9 @@
 
 APP_NAME = "MasumPDF Reader"
 APP_VERSION = "1.0.2"
+# Internal build identity for update checks. The visible app version stays 1.0.2.
+APP_RELEASE_TAG = "v1.0.2-local-build"
+APP_BUILD_DATE = "2026-05-26T00:00:00Z"
 # GitHub repo used to check for newer versions (owner/repo).
 # Change this if your repository name is different.
 GITHUB_REPO = "masumrefat/MasumPDF-Reader"

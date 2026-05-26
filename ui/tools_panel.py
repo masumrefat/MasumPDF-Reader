@@ -155,6 +155,7 @@ class AllToolsPanel(QWidget):
     highlight_requested = Signal()
     select_text_requested = Signal()
     fill_form_requested = Signal()
+    fill_sign_requested = Signal()
     line_highlight_requested = Signal()
     note_requested = Signal()
     comment_requested = Signal()
@@ -170,7 +171,6 @@ class AllToolsPanel(QWidget):
     edit_mode_requested = Signal()
     sign_requested = Signal()
     prepare_form_requested = Signal()
-    fill_form_requested = Signal()
     add_text_requested = Signal()
     add_image_requested = Signal()
     header_footer_requested = Signal()
@@ -562,7 +562,8 @@ class AllToolsPanel(QWidget):
                                        "Click a form field and type to fill it",
                                        self.fill_form_requested, "fill_form")
         self._add(L, "fill_sign", "Fill & Sign",
-                  "Fill existing form fields", self.fill_form_requested)
+                  "Fill existing form fields and create a flattened signed copy",
+                  self.fill_sign_requested)
 
         self._section(L, "Rich Media")
         self.media_btn = self._add(L, "link", "Link / Media",

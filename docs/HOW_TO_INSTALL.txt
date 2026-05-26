@@ -1,0 +1,50 @@
+============================================================
+  MasumPDF Reader - How to install
+  by Chowdhury Mohammad Masum Refat
+  For education purpose only
+============================================================
+
+IMPORTANT: First put this folder in a SHORT path, e.g. C:\pdf
+(not deep inside Downloads). Then choose ONE of the two ways below.
+
+------------------------------------------------------------
+WAY 1 - PROPER INSTALL (recommended)
+------------------------------------------------------------
+  Right-click  INSTALL.bat  ->  "Run as administrator"
+
+  This COPIES the app to a permanent place
+  (C:\Program Files\MasumPDF Reader) and:
+    - puts a "MasumPDF Reader" icon on your Desktop
+    - lists it in Windows Settings > Apps
+    - lets you set it as the default PDF app
+
+  AFTER it finishes, you CAN DELETE the folder you downloaded.
+  The app keeps running from its installed location.
+
+  To remove it: open the install folder and run UNINSTALL.bat,
+  or use Windows Settings > Apps. This deletes all its files.
+
+  A NEW VERSION: just run INSTALL.bat from the new download -
+  it installs over the old version automatically.
+
+------------------------------------------------------------
+WAY 2 - QUICK RUN (no real install)
+------------------------------------------------------------
+  Double-click  SETUP.bat
+
+  This sets up and runs the app FROM THIS FOLDER.
+  Do NOT delete this folder if you use this way - the app
+  needs it. Good for quick testing.
+
+------------------------------------------------------------
+NOTES
+------------------------------------------------------------
+* You need internet the first time (to get Python + parts).
+* PLEASE BE PATIENT: the first setup takes about 15-20 minutes and
+  downloads around 800 MB of components. This is normal and happens
+  only once. After that, the app opens fast.
+* If Python is missing, install from python.org and tick
+  "Add Python to PATH", then run again.
+* "no Qt platform plugin" error = the app wasn't set up on
+  that PC yet. Run INSTALL.bat (or SETUP.bat) first.
+============================================================

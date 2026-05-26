@@ -7,7 +7,7 @@ sign placement.
 """
 
 from PySide6.QtWidgets import (
-    QWidget, QScrollArea, QSizePolicy, QApplication,
+    QWidget, QScrollArea, QSizePolicy, QApplication, QMenu,
 )
 from pathlib import Path
 from PySide6.QtCore import Qt, QSize, QRect, Signal, QPoint, QRectF, QPointF
@@ -43,6 +43,7 @@ TOOL_EDIT_MODE = "edit_mode"
 TOOL_ADD_TEXT = "add_text"
 TOOL_ADD_IMAGE = "add_image"
 TOOL_DELETE_ANNOT = "delete_annot"
+TOOL_EXTRACT_FIGURE = "extract_figure"  # drag a figure/page area and save it as an image
 
 # Tools that operate on a clicked text line
 LINE_TOOLS = {TOOL_LINE_HIGHLIGHT, TOOL_LINE_COMMENT, TOOL_LINE_EDIT, TOOL_LINE_COLOR, TOOL_EDIT_MODE}
@@ -74,6 +75,8 @@ class PDFCanvas(QWidget):
     form_field_clicked = Signal(int, object, str, str) # page, bbox, name, type
     ink_drawn = Signal(int, object)                    # page, list of points
     xmark_placed = Signal(int, object)                 # page, point
+    figure_area_save_requested = Signal(int, object)       # page, QRectF in PDF coords
+    figure_extract_mode_started = Signal(int)              # page: user chose right-click save figure
 
     PAGE_SPACING = 18
     PAGE_BORDER_COLOR = QColor(0, 0, 0, 60)
@@ -116,7 +119,10 @@ class PDFCanvas(QWidget):
         self._hover_line: tuple[int, int] | None = None   # (page_index, line_index)
 
         self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # The canvas should be exactly as tall as the rendered PDF pages.
+        # Expanding vertically lets QScrollArea add a large empty tail after
+        # the final page, so keep the canvas fixed to its calculated layout.
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAutoFillBackground(True)
 
@@ -232,7 +238,7 @@ class PDFCanvas(QWidget):
             self.setCursor(Qt.IBeamCursor)
         elif tool == TOOL_SELECT_TEXT:
             self.setCursor(Qt.IBeamCursor)
-        elif tool in (TOOL_RECT, TOOL_CIRCLE):
+        elif tool in (TOOL_RECT, TOOL_CIRCLE, TOOL_EXTRACT_FIGURE):
             self.setCursor(Qt.CrossCursor)
         elif tool in (TOOL_SIGN, TOOL_STAMP, TOOL_COMMENT, TOOL_ADD_TEXT):
             self.setCursor(Qt.CrossCursor)
@@ -319,10 +325,16 @@ class PDFCanvas(QWidget):
         self._page_pixmaps.pop(page_index, None)
         self.update()
 
+    def _apply_canvas_size(self, width: int, height: int):
+        width = max(1, int(width))
+        height = max(1, int(height))
+        self.setMinimumSize(width, height)
+        self.resize(width, height)
+
     def _relayout(self):
         self._page_rects = []
         if not self.pdf or self.pdf.page_count == 0:
-            self.setMinimumSize(800, 600)
+            self._apply_canvas_size(800, 600)
             return
         spacing = self.PAGE_SPACING
         if self.view_mode == VIEW_TWO_PAGE:
@@ -346,7 +358,7 @@ class PDFCanvas(QWidget):
                 if b is not None: sizes[b] = (wb, hb)
                 total_h += pair_h + spacing
             canvas_w = max_pair_w + spacing * 4
-            self.setMinimumSize(canvas_w, total_h)
+            self._apply_canvas_size(canvas_w, total_h)
             y = spacing
             self._page_rects = [QRect() for _ in range(self.pdf.page_count)]
             for (a, b), (pair_w, pair_h) in zip(pairs, row_h_list):
@@ -362,7 +374,7 @@ class PDFCanvas(QWidget):
             w, h = self._scaled_size(self._current_page)
             canvas_w = w + spacing * 4
             canvas_h = h + spacing * 2
-            self.setMinimumSize(canvas_w, canvas_h)
+            self._apply_canvas_size(canvas_w, canvas_h)
             self._page_rects = [QRect() for _ in range(self.pdf.page_count)]
             x = (canvas_w - w) // 2
             self._page_rects[self._current_page] = QRect(x, spacing, w, h)
@@ -374,7 +386,7 @@ class PDFCanvas(QWidget):
                 max_w = max(max_w, w)
                 total_h += h + spacing
             canvas_w = max_w + spacing * 4
-            self.setMinimumSize(canvas_w, total_h)
+            self._apply_canvas_size(canvas_w, total_h)
             y = spacing
             self._page_rects = []
             for w, h in sizes:
@@ -521,7 +533,7 @@ class PDFCanvas(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(r)
 
-        if (self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE)
+        if (self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE, TOOL_EXTRACT_FIGURE)
                 and self._drag_active
                 and self._drag_start_pdf is not None
                 and self._drag_current_pdf is not None
@@ -553,6 +565,8 @@ class PDFCanvas(QWidget):
                 fill, pen = QColor(100, 150, 255, 80), QColor(40, 90, 200)
             elif self._tool == TOOL_ADD_IMAGE:
                 fill, pen = QColor(255, 140, 0, 70), QColor(180, 90, 0)
+            elif self._tool == TOOL_EXTRACT_FIGURE:
+                fill, pen = QColor(30, 144, 255, 45), QColor(30, 100, 220)
             elif self._tool == TOOL_SELECT_TEXT:
                 fill, pen = QColor(80, 130, 255, 45), QColor(40, 90, 200)
             else:  # TOOL_LINK / SHAPE tools
@@ -731,6 +745,48 @@ class PDFCanvas(QWidget):
                 page, QRectF(bbox[0], bbox[1], bbox[2] - bbox[0],
                              bbox[3] - bbox[1]), text)
 
+
+    def contextMenuEvent(self, event):
+        """Right-click helper for research figures.
+
+        Many academic PDFs do not expose each figure as a separate image object
+        because charts, labels, and captions may be vector/text layers.  The
+        most reliable user workflow is therefore: right-click the page, choose
+        Save figure area, then drag a rectangle around the figure.  We render
+        that exact page area to PNG/JPG without changing the PDF.
+        """
+        if not self.pdf or not self.pdf.doc:
+            super().contextMenuEvent(event)
+            return
+        p = self._page_at(event.pos())
+        if p < 0:
+            super().contextMenuEvent(event)
+            return
+
+        menu = QMenu(self)
+        area_action = menu.addAction("Save figure / selected area as image...")
+        page_action = menu.addAction("Save whole page as image...")
+        menu.addSeparator()
+        cancel_action = menu.addAction("Cancel")
+        chosen = menu.exec(event.globalPos())
+        if chosen == area_action:
+            self.set_tool(TOOL_EXTRACT_FIGURE)
+            self.figure_extract_mode_started.emit(p)
+            event.accept()
+            return
+        if chosen == page_action:
+            try:
+                w, h = self.pdf.page_size(p)
+                self.figure_area_save_requested.emit(p, QRectF(0, 0, w, h))
+            except Exception:
+                pass
+            event.accept()
+            return
+        if chosen == cancel_action:
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
     def mousePressEvent(self, event):
         if not self.pdf or event.button() != Qt.LeftButton:
             super().mousePressEvent(event); return
@@ -762,7 +818,7 @@ class PDFCanvas(QWidget):
             event.accept(); return
 
         # drag-rect tools
-        if self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE):
+        if self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE, TOOL_EXTRACT_FIGURE):
             self._drag_start_page = p
             self._drag_start_pdf = pdf_pt
             self._drag_current_pdf = pdf_pt
@@ -899,7 +955,7 @@ class PDFCanvas(QWidget):
             event.accept(); return
 
         # drag-rect tools live update
-        if self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE) and self._drag_active:
+        if self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE, TOOL_EXTRACT_FIGURE) and self._drag_active:
             p = self._drag_start_page
             if p >= 0 and not self._page_rects[p].isNull():
                 self._drag_current_pdf = self._pdf_coords_at(p, event.pos())
@@ -975,7 +1031,7 @@ class PDFCanvas(QWidget):
             self._ink_points = []
             self._ink_page = -1
             self.update(); event.accept(); return
-        if (self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE)
+        if (self._tool in (TOOL_HIGHLIGHT, TOOL_FIELD, TOOL_LINK, TOOL_ADD_IMAGE, TOOL_SELECT_TEXT, TOOL_RECT, TOOL_CIRCLE, TOOL_EXTRACT_FIGURE)
                 and self._drag_active and event.button() == Qt.LeftButton):
             self._drag_active = False
             tool_was = self._tool
@@ -1002,6 +1058,9 @@ class PDFCanvas(QWidget):
                         self.image_placement_requested.emit(self._drag_start_page, rect)
                     elif tool_was == TOOL_SELECT_TEXT:
                         self._copy_text_in_rect(self._drag_start_page, x0, y0, x1, y1)
+                    elif tool_was == TOOL_EXTRACT_FIGURE:
+                        self.figure_area_save_requested.emit(self._drag_start_page, rect)
+                        self.set_tool(TOOL_NONE)
                     elif tool_was == TOOL_RECT:
                         self.shape_drawn.emit(self._drag_start_page, "rect", rect)
                     elif tool_was == TOOL_CIRCLE:
@@ -1059,6 +1118,8 @@ class PDFViewer(QScrollArea):
     form_field_clicked = Signal(int, object, str, str)
     ink_drawn = Signal(int, object)
     xmark_placed = Signal(int, object)
+    figure_area_save_requested = Signal(int, object)
+    figure_extract_mode_started = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1086,6 +1147,8 @@ class PDFViewer(QScrollArea):
         self.canvas.form_field_clicked.connect(self.form_field_clicked.emit)
         self.canvas.ink_drawn.connect(self.ink_drawn.emit)
         self.canvas.xmark_placed.connect(self.xmark_placed.emit)
+        self.canvas.figure_area_save_requested.connect(self.figure_area_save_requested.emit)
+        self.canvas.figure_extract_mode_started.connect(self.figure_extract_mode_started.emit)
         self.canvas.shape_drawn.connect(self.shape_drawn.emit)
         self.canvas.text_placement_requested.connect(self.text_placement_requested.emit)
         self.canvas.image_placement_requested.connect(self.image_placement_requested.emit)

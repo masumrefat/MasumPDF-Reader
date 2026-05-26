@@ -1,7 +1,6 @@
 """Small file/path helpers."""
 
 import os
-import shutil
 import platform
 import subprocess
 from pathlib import Path
@@ -45,23 +44,6 @@ def open_containing_folder(path: str):
             subprocess.Popen(["xdg-open", folder])
     except Exception:
         pass
-
-
-def backup_path(path: str) -> str:
-    """Return a sibling backup file path like name.pdf.bak"""
-    return path + ".bak"
-
-
-def make_backup(path: str) -> str | None:
-    """Make a .bak copy. Returns backup path or None on failure."""
-    if not file_exists(path):
-        return None
-    bak = backup_path(path)
-    try:
-        shutil.copy2(path, bak)
-        return bak
-    except Exception:
-        return None
 
 
 def safe_unique_path(path: str) -> str:

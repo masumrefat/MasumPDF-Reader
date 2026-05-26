@@ -28,7 +28,7 @@ from core.metadata import MetadataManager
 from core.ocr_engine import OCREngine
 
 from utils.file_utils import (
-    human_size, open_containing_folder, make_backup, safe_unique_path, file_exists
+    human_size, open_containing_folder, safe_unique_path, file_exists
 )
 from utils.settings import AppSettings
 from utils.worker_threads import OCRWorker, MergeWorker, ImageExportWorker, PdfToWordWorker
@@ -63,6 +63,7 @@ class PDFTab(QWidget):
         self.stamps = None
         self.media = None
         self.path: str | None = None
+        self._citation_link_summary: dict | None = None
         self._search_hits: dict = {}
         self._flat_hits: list = []  # [(page, hit_index), ...]
         self._active_hit_idx: int = -1
@@ -459,10 +460,10 @@ class PDFTab(QWidget):
         from PySide6.QtWidgets import QWidget, QVBoxLayout
         wrap = QWidget()
         wrap.setObjectName("AnnotBarWrap")
-        wrap.setFixedWidth(44)
+        wrap.setFixedWidth(84)
         wrap.setStyleSheet("QWidget#AnnotBarWrap { background: transparent; border: none; }")
         lay = QVBoxLayout(wrap)
-        lay.setContentsMargins(4, 10, 3, 0)
+        lay.setContentsMargins(5, 10, 3, 0)
         lay.setSpacing(0)
         lay.addWidget(annot_bar, 0, Qt.AlignTop)
         lay.addStretch(1)
@@ -546,92 +547,93 @@ class PDFTab(QWidget):
             pass
 
     def _build_annot_bar(self):
-        """Thin vertical markup toolbar next to the PDF (self-contained)."""
-        from PySide6.QtWidgets import QWidget, QVBoxLayout, QToolButton
-        from PySide6.QtCore import QSize
+        """Easy markup toolbar beside the PDF.
+
+        The previous rail was very compact and hid common tools inside small
+        drop-down buttons.  For normal users that made marking feel difficult.
+        This version shows the most-used actions as direct one-click buttons:
+        Select, Highlight, Underline, Pen, Text, Box, Circle, X, Check, Erase,
+        and Color.
+        """
+        from PySide6.QtWidgets import QWidget, QVBoxLayout, QToolButton, QLabel, QFrame
+        from PySide6.QtCore import QSize, Qt
+
         bar = QWidget()
         bar.setObjectName("AnnotBar")
-        bar.setFixedWidth(37)
-        bar.setFixedHeight(224)
+        bar.setFixedWidth(76)
+        bar.setFixedHeight(430)
         bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         is_dark = self._is_dark_mode()
-        bg = "rgba(17,24,39,0.97)" if is_dark else "rgba(248,250,252,0.96)"
+        bg = "rgba(17,24,39,0.97)" if is_dark else "rgba(248,250,252,0.98)"
         border = "#334155" if is_dark else "#DDE3ED"
-        text = "#E5E7EB" if is_dark else "#475569"
+        text = "#E5E7EB" if is_dark else "#334155"
+        sub_text = "#CBD5E1" if is_dark else "#64748B"
         hover = "rgba(96,165,250,0.18)" if is_dark else "rgba(37,99,235,0.08)"
-        checked = "rgba(96,165,250,0.26)" if is_dark else "rgba(37,99,235,0.12)"
+        checked = "rgba(96,165,250,0.30)" if is_dark else "rgba(37,99,235,0.14)"
         accent = "#93C5FD" if is_dark else "#2563EB"
         bar.setStyleSheet(
-            f"QWidget#AnnotBar {{ background: {bg}; border: 1px solid {border}; border-radius: 18px; }}"
-            f"QToolButton {{ border: none; padding: 0px; border-radius: 14px; color: {text}; background: transparent; }}"
+            f"QWidget#AnnotBar {{ background: {bg}; border: 1px solid {border}; border-radius: 16px; }}"
+            f"QLabel#AnnotTitle {{ color: {sub_text}; font-size: 10px; font-weight: 700; padding: 0px; }}"
+            f"QToolButton {{ border: none; padding: 2px; border-radius: 10px; color: {text}; background: transparent; font-size: 10px; }}"
             f"QToolButton:hover {{ background: {hover}; color: {accent}; }}"
-            f"QToolButton:checked {{ background: {checked}; color: {accent}; }}"
-            "QToolButton::menu-indicator { image: none; width: 0px; height: 0px; subcontrol-position: right center; }")
+            f"QToolButton:checked {{ background: {checked}; color: {accent}; font-weight: 700; }}"
+            "QToolButton::menu-indicator { image: none; width: 0px; height: 0px; }")
+
         v = QVBoxLayout(bar)
-        v.setContentsMargins(3, 7, 3, 7)
+        v.setContentsMargins(5, 8, 5, 8)
         v.setSpacing(3)
         self._annot_buttons = []
-        annot_icon_size = 18
+        annot_icon_size = 15
+
+        title = QLabel("MARK")
+        title.setObjectName("AnnotTitle")
+        title.setAlignment(Qt.AlignCenter)
+        v.addWidget(title)
 
         def _apply_icon(button, icon_name):
             button.setIcon(make_icon(icon_name, "#E5E7EB" if self._is_dark_mode() else "#475569", annot_icon_size))
             button.setIconSize(QSize(annot_icon_size, annot_icon_size))
-            button.setText("")
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
 
-        def add_btn(symbol, tip, tool, icon_name=None):
+        def add_btn(label, tip, tool=None, icon_name=None, callback=None):
             b = QToolButton()
+            b.setText(label)
             b.setToolTip(tip)
             b.setCheckable(True)
-            b.setFixedSize(QSize(31, 31))
+            b.setFixedSize(QSize(64, 34))
             if icon_name:
                 _apply_icon(b, icon_name)
+            if callback is not None:
+                b.clicked.connect(lambda checked=False, btn=b: callback(btn))
             else:
-                b.setText(symbol)
-            b.clicked.connect(lambda: self._annot_pick_tool(tool, b))
+                b.clicked.connect(lambda checked=False, btn=b, tl=tool: self._annot_pick_tool(tl, btn))
             v.addWidget(b)
             self._annot_buttons.append(b)
             return b
 
-        add_btn("", "Select / normal mode", "none", "select")
+        add_btn("Select", "Normal select mode", "none", "select")
+        add_btn("High", "Highlight text: drag across words", callback=lambda btn: self._set_highlight_style("highlight", btn))
+        add_btn("Under", "Underline text: drag across words", callback=lambda btn: self._set_highlight_style("underline", btn))
+        add_btn("Pen", "Free-hand pen: draw on the page", "ink", "draw")
+        add_btn("Text", "Add text box: click on the page", "add_text")
+        add_btn("Box", "Draw rectangle: drag a box", "rect")
+        add_btn("Circle", "Draw circle/ellipse: drag a box", "circle")
+        add_btn("X", "Place X mark: click on the page", callback=lambda btn: self._set_mark_kind("xmark", btn))
+        add_btn("✓", "Place check mark: click on the page", callback=lambda btn: self._set_mark_kind("check", btn))
+        add_btn("Erase", "Delete annotation: click an annotation", "delete_annot")
 
-        # Highlight tool with a dropdown: Highlight / Underline / Strikethrough
-        self._add_annot_menu_btn(
-            v, "", "Text markup",
-            [("Highlight", lambda: self._set_highlight_style("highlight")),
-             ("Underline", lambda: self._set_highlight_style("underline")),
-             ("Strikeout", lambda: self._set_highlight_style("strikeout"))], "highlight")
-
-        # Draw / shapes dropdown: Free-hand / Line / Rectangle / Circle
-        self._add_annot_menu_btn(
-            v, "", "Draw & shapes",
-            [("Free-hand draw", lambda: self._annot_pick_tool_named("ink")),
-             ("Line", lambda: self._annot_pick_tool_named("line_highlight")),
-             ("Rectangle", lambda: self._annot_pick_tool_named("rect")),
-             ("Circle", lambda: self._annot_pick_tool_named("circle"))], "draw")
-
-        # Marks dropdown: X mark / Checkmark / Dot
-        self._add_annot_menu_btn(
-            v, "", "Marks",
-            [("Cross / X mark", lambda: self._set_mark_kind("xmark")),
-             ("Check mark", lambda: self._set_mark_kind("check")),
-             ("Dot", lambda: self._set_mark_kind("dot"))], "mark_x")
-
-        add_btn("", "Underline a line — click a line", "line_highlight", "underline")
-
-        # thin divider line between tools and the color picker
-        from PySide6.QtWidgets import QFrame
         div = QFrame()
         div.setFrameShape(QFrame.HLine)
         div.setStyleSheet("color: #334155; background: #334155; max-height: 1px;" if self._is_dark_mode() else "color: #D5D8DF; background: #D5D8DF; max-height: 1px;")
         div.setFixedHeight(1)
-        v.addSpacing(4)
+        v.addSpacing(2)
         v.addWidget(div)
-        v.addSpacing(4)
+        v.addSpacing(2)
 
-        # small, subtle color dot (not a big bright box)
         self.annot_color_btn = QToolButton()
+        self.annot_color_btn.setText("Color")
         self.annot_color_btn.setToolTip("Annotation color — click to change")
-        self.annot_color_btn.setFixedSize(QSize(31, 31))
+        self.annot_color_btn.setFixedSize(QSize(64, 34))
         self._style_color_dot()
         self.annot_color_btn.clicked.connect(self._annot_pick_color)
         v.addWidget(self.annot_color_btn)
@@ -670,15 +672,19 @@ class PDFTab(QWidget):
         self.viewer.set_tool(tool)
         self.viewer.set_annot_color(self._annot_color)
 
-    def _set_highlight_style(self, style):
+    def _set_highlight_style(self, style, btn=None):
         """Choose highlight / underline / strikeout, then arm the markup tool."""
         self._highlight_style = style
+        for bb in self._annot_buttons:
+            bb.setChecked(btn is not None and bb is btn)
         self.viewer.set_tool("highlight")
         self.viewer.set_annot_color(self._annot_color)
 
-    def _set_mark_kind(self, kind):
+    def _set_mark_kind(self, kind, btn=None):
         """Choose which mark to place (X / check / dot), then arm the tool."""
         self._mark_kind = kind
+        for bb in self._annot_buttons:
+            bb.setChecked(btn is not None and bb is btn)
         self.viewer.set_tool("xmark")
         self.viewer.set_annot_color(self._annot_color)
 
@@ -689,11 +695,12 @@ class PDFTab(QWidget):
         hover = "rgba(96,165,250,0.18)" if self._is_dark_mode() else "rgba(37,99,235,0.08)"
         self.annot_color_btn.setStyleSheet(
             "QToolButton {"
-            "  border: none; border-radius: 14px;"
-            f" background: qradialgradient(cx:0.5, cy:0.5, radius:0.26,"
-            f"   fx:0.5, fy:0.5, stop:0 {self._annot_color},"
-            f"   stop:0.78 {self._annot_color}, stop:0.82 {ring},"
-            f"   stop:0.86 transparent, stop:1 transparent);"
+            "  border: none; border-radius: 10px; padding-left: 19px; text-align: left;"
+            f" color: {'#E5E7EB' if self._is_dark_mode() else '#334155'};"
+            f" background: qradialgradient(cx:0.14, cy:0.50, radius:0.16,"
+            f"   fx:0.14, fy:0.50, stop:0 {self._annot_color},"
+            f"   stop:0.72 {self._annot_color}, stop:0.76 {ring},"
+            f"   stop:0.82 transparent, stop:1 transparent);"
             "}"
             f"QToolButton:hover {{ background-color: {hover}; }}")
 
@@ -998,6 +1005,7 @@ class PDFTab(QWidget):
         # so the first paint is already at the chosen DPI.
         self.viewer.set_render_dpi(self.settings.render_dpi())
         self.viewer.set_document(doc)
+        self._auto_build_citation_links()
         self.left_side.populate(doc)
         self._refresh_right_sidebar()
         self._nav_sync()
@@ -1013,6 +1021,67 @@ class PDFTab(QWidget):
             self.viewer.set_zoom(self.settings.default_zoom())
         return True
 
+    def _auto_build_citation_links(self):
+        """Best-effort: make non-clickable numbered citations clickable on open.
+
+        Some publisher PDFs already contain citation links; those are left
+        untouched. For PDFs without citation links, this scans numbered
+        citations such as [1], [2,3], [4-6] and links them to the matching
+        numbered reference entry. The links are added in memory so they work
+        immediately; pressing Ctrl+S or Save As will preserve them in the PDF.
+        """
+        self._citation_link_summary = None
+        if not self.document or not self.document.doc:
+            return
+        try:
+            from core.citation_extractor import build_missing_citation_links
+            summary = build_missing_citation_links(self.document.doc)
+            self._citation_link_summary = summary
+            if summary.get("created", 0) > 0:
+                # The document content changed in memory, but do not annoy the
+                # user with an unsaved-changes warning just because the reader
+                # improved navigation automatically. If the user saves later,
+                # the links are written into the PDF.
+                self.document.mark_dirty(False)
+                try:
+                    self.viewer.canvas.update()
+                except Exception:
+                    pass
+        except Exception as e:
+            self._citation_link_summary = {
+                "created": 0, "references": 0, "skipped_existing": 0,
+                "reason": str(e),
+            }
+
+    def rebuild_citation_links(self, show_message: bool = True):
+        """Manual command for the Tools menu."""
+        if not self.document or not self.document.doc:
+            return False
+        try:
+            from core.citation_extractor import build_missing_citation_links
+            summary = build_missing_citation_links(self.document.doc)
+            self._citation_link_summary = summary
+            if summary.get("created", 0) > 0:
+                self.document.mark_dirty(True)
+                try:
+                    self.viewer.canvas.update()
+                except Exception:
+                    pass
+            if show_message:
+                QMessageBox.information(
+                    self,
+                    "Citation links",
+                    f"Created {summary.get('created', 0)} clickable citation link(s).\n"
+                    f"Detected {summary.get('references', 0)} numbered reference(s).\n\n"
+                    "Works best with numbered citations like [1], [2,3], [4-6].\n"
+                    "Author-year citation linking is not automatic yet."
+                )
+            return True
+        except Exception as e:
+            if show_message:
+                QMessageBox.critical(self, "Citation links", str(e))
+            return False
+
     def close_document(self):
         if self.document:
             self.document.close()
@@ -1025,17 +1094,22 @@ class PDFTab(QWidget):
 
     def save(self, output_path: str | None = None):
         if not self.document:
-            return
+            return False
         target = output_path or self.path
         if not target:
             return self.save_as()
-        # backup before overwrite
-        if target == self.path:
-            make_backup(self.path)
+        # Ctrl+S saves directly to the existing file. Save As uses a new path.
+        # No .bak backup file is created.
         self.document.save(target)
-        if output_path and output_path != self.path:
-            # opened a saved copy — switch to it
-            self.path = output_path
+        self.path = self.document.path
+        try:
+            self.viewer.canvas._page_pixmaps.clear()
+            self.viewer.canvas.invalidate_line_cache()
+            self.viewer.canvas.update()
+        except Exception:
+            pass
+        if hasattr(self, "status_msg"):
+            self.status_msg.setText(f"Saved: {os.path.basename(self.path)}")
         return True
 
     def save_as(self) -> bool:
@@ -1049,6 +1123,15 @@ class PDFTab(QWidget):
         if not path.lower().endswith(".pdf"):
             path += ".pdf"
         self.document.save(path)
+        self.path = self.document.path
+        try:
+            self.viewer.canvas._page_pixmaps.clear()
+            self.viewer.canvas.invalidate_line_cache()
+            self.viewer.canvas.update()
+        except Exception:
+            pass
+        if hasattr(self, "status_msg"):
+            self.status_msg.setText(f"Saved as: {os.path.basename(self.path)}")
         return True
 
     # ---- annotations ----
@@ -1617,6 +1700,7 @@ class MainWindow(QMainWindow):
             (tr("Extract pages…"), self.action_extract_pages),
             (tr("Compare two PDFs…"), self.action_compare),
             (tr("Extract citations…"), self.action_extract_citations),
+            (tr("Build clickable citation links…"), self.action_build_citation_links),
             (tr("Reference Collection (view)…"), self.open_reference_panel),
             (tr("Collect all references from this PDF…"), self.action_collect_references_now),
             (tr("Mark & collect references (toggle)"), self.action_mark_reference_toggle),
@@ -1840,6 +1924,8 @@ class MainWindow(QMainWindow):
                 (t.viewer.shape_drawn, self._on_shape_drawn),
                 (t.viewer.text_placement_requested, self._on_text_placement),
                 (t.viewer.image_placement_requested, self._on_image_placement),
+                (t.viewer.figure_area_save_requested, self._on_figure_area_save_requested),
+                (t.viewer.figure_extract_mode_started, self._on_figure_extract_mode_started),
                 (t.viewer.annot_delete_requested, self._on_annot_delete),
                 (t.viewer.open_url_requested, self._on_open_url),
             ):
@@ -1872,7 +1958,7 @@ class MainWindow(QMainWindow):
                 (tp.line_color_requested,     self.action_line_color_toggle),
                 (tp.sign_requested,           self.action_sign),
                 (tp.prepare_form_requested,   self.action_prepare_form),
-                (tp.fill_form_requested,      self.action_fill_form),
+                (tp.fill_sign_requested,      self.action_fill_form),
                 (tp.media_requested,          self.action_media),
                 (tp.send_review_requested,    self.action_send_review),
                 (tp.create_pdf_requested,     self.action_create_pdf),
@@ -2037,6 +2123,16 @@ class MainWindow(QMainWindow):
         self.settings.add_recent_file(path)
         self._rebuild_recent_menu()
         self._update_status()
+        try:
+            summary = getattr(tab, "_citation_link_summary", None) or {}
+            created = int(summary.get("created", 0) or 0)
+            refs = int(summary.get("references", 0) or 0)
+            if created > 0:
+                self.status_msg.setText(
+                    f"Opened PDF. Auto-created {created} citation link(s) to {refs} reference(s)."
+                )
+        except Exception:
+            pass
 
     def _close_tab(self, idx):
         w = self.tab_widget.widget(idx)
@@ -2064,6 +2160,9 @@ class MainWindow(QMainWindow):
             return
         try:
             t.save()
+            idx = self.tab_widget.currentIndex()
+            if idx >= 0:
+                self.tab_widget.setTabText(idx, t.document.file_name())
             self.status_msg.setText(f"Saved {t.path}")
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
@@ -2073,6 +2172,9 @@ class MainWindow(QMainWindow):
         if not t or not t.document:
             return
         if t.save_as():
+            idx = self.tab_widget.currentIndex()
+            if idx >= 0:
+                self.tab_widget.setTabText(idx, t.document.file_name())
             self.status_msg.setText(f"Saved as {t.path}")
 
     def action_print(self):
@@ -2863,6 +2965,27 @@ class MainWindow(QMainWindow):
         self._run_worker(worker, f"Compressing to {dpi} DPI", on_done)
 
     # ---- compare ----
+    def action_build_citation_links(self):
+        """Manually add clickable links from citations to reference entries."""
+        t = self.current_tab()
+        if not t or not t.document:
+            QMessageBox.information(self, "Citation links", "Open a PDF first.")
+            return
+        ok = t.rebuild_citation_links(show_message=True)
+        if ok:
+            try:
+                summary = getattr(t, "_citation_link_summary", None) or {}
+                created = int(summary.get("created", 0) or 0)
+                refs = int(summary.get("references", 0) or 0)
+                if created > 0:
+                    self.status_msg.setText(
+                        f"Created {created} clickable citation link(s) to {refs} reference(s). Press Ctrl+S to save them."
+                    )
+                else:
+                    self.status_msg.setText("No new missing numbered citation links found.")
+            except Exception:
+                pass
+
     def action_extract_citations(self):
         """Extract in-text citations + reference list and show them. Offline."""
         t = self.current_tab()
@@ -3365,7 +3488,7 @@ class MainWindow(QMainWindow):
             return
         try:
             t.document.push_undo("Free-hand draw")
-            color = getattr(self, "_annot_color", "#E53935")
+            color = getattr(t, "_annot_color", "#E53935")
             # ink expects a list of strokes; each stroke is a list of points
             t.annotations.add_ink(page_index, [points], color=color, width=2)
             t.viewer.canvas.invalidate_page(page_index)
@@ -3648,7 +3771,8 @@ class MainWindow(QMainWindow):
             self._notes_panel = NotesPanel(self.text_collection, self)
             self._notes_panel.jump_requested.connect(self._jump_to_note)
         self._notes_panel.refresh()
-        self._notes_panel.show()
+        # Notes collection is data-heavy, so open it maximized by default.
+        self._notes_panel.showMaximized()
         self._notes_panel.raise_()
         self._notes_panel.activateWindow()
 
@@ -3658,7 +3782,9 @@ class MainWindow(QMainWindow):
             self._library_panel = LibraryPanel(self.library, self)
             self._library_panel.open_paper_requested.connect(self._open_from_library)
         self._library_panel.refresh_all()
-        self._library_panel.show()
+        # Research Library is data-heavy, so open it maximized by default.
+        # Users can still restore/resize the window from the title bar.
+        self._library_panel.showMaximized()
         self._library_panel.raise_()
         self._library_panel.activateWindow()
 
@@ -3736,7 +3862,8 @@ class MainWindow(QMainWindow):
                 lambda: self.status_msg.setText(
                     f"{len(self.ref_collection)} references collected."))
         self._ref_panel.refresh()
-        self._ref_panel.show()
+        # Reference collection is data-heavy, so open it maximized by default.
+        self._ref_panel.showMaximized()
         self._ref_panel.raise_()
         self._ref_panel.activateWindow()
 
@@ -4049,6 +4176,77 @@ class MainWindow(QMainWindow):
         t.viewer.set_tool(TOOL_ADD_IMAGE)
         self.status_msg.setText(
             "Drag a rectangle on the page where the image should go.")
+
+
+    def _on_figure_extract_mode_started(self, page_index):
+        """User chose right-click > Save figure area. Tell them the next step."""
+        try:
+            self.status_msg.setText(
+                f"Figure export: drag a rectangle around the figure on page {page_index + 1}.")
+        except Exception:
+            pass
+
+    def _on_figure_area_save_requested(self, page_index, rect):
+        """Render a selected PDF page area to a separate image file.
+
+        This intentionally crops the visible page area instead of trying only to
+        extract embedded raster images. Research figures often combine vector
+        graphics, text labels, plots, and multiple image layers; cropping the
+        rendered page area preserves exactly what the user sees.
+        """
+        t = self.current_tab()
+        if not t or not t.document or not t.document.doc:
+            QMessageBox.information(self, "Save figure", "Open a PDF first.")
+            return
+        try:
+            import fitz
+            page = t.document.doc[page_index]
+            page_rect = page.rect
+
+            # Convert QRectF-like object to a PyMuPDF Rect.
+            try:
+                clip = fitz.Rect(float(rect.x()), float(rect.y()),
+                                 float(rect.x() + rect.width()),
+                                 float(rect.y() + rect.height()))
+            except Exception:
+                clip = fitz.Rect(rect)
+            clip = clip & page_rect
+            if clip.is_empty or clip.width < 3 or clip.height < 3:
+                QMessageBox.information(
+                    self, "Save figure",
+                    "The selected area is too small. Right-click the page again and drag around the figure.")
+                return
+
+            base = "figure"
+            if t.path:
+                base = os.path.splitext(os.path.basename(t.path))[0]
+            default_name = f"{base}_page{page_index + 1}_figure.png"
+            start_dir = os.path.dirname(t.path) if t.path else os.path.expanduser("~")
+            default_path = os.path.join(start_dir, default_name)
+            out, selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Save selected figure as image",
+                default_path,
+                "PNG image (*.png);;JPEG image (*.jpg);;All files (*)")
+            if not out:
+                self.status_msg.setText("Figure export cancelled.")
+                return
+            root, ext = os.path.splitext(out)
+            if not ext:
+                out = root + (".jpg" if "JPEG" in selected_filter else ".png")
+
+            # 3x page scale gives good quality for publication figures without
+            # making normal crops huge.  It is independent of the current zoom.
+            matrix = fitz.Matrix(3.0, 3.0)
+            pix = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+            pix.save(out)
+            self.status_msg.setText(f"Figure image saved: {out}")
+            try:
+                QMessageBox.information(self, "Save figure", f"Figure saved:\n{out}")
+            except Exception:
+                pass
+        except Exception as e:
+            QMessageBox.critical(self, "Could not save figure", str(e))
 
     def _on_image_placement(self, page_index, rect):
         t = self.current_tab()
@@ -4372,10 +4570,12 @@ class MainWindow(QMainWindow):
             box.setIcon(QMessageBox.Information)
             box.setWindowTitle("Update available")
             asset = result.get("asset_name") or "latest release package"
+            latest_tag = result.get("latest_tag") or result.get("latest")
+            current_tag = result.get("current_tag") or f"v{result.get('current')}"
             box.setText(
-                f"A new version of {APP_NAME} is available.\n\n"
-                f"Current version: {result.get('current')}\n"
-                f"Latest version:  {result.get('latest')}\n\n"
+                f"A new release of {APP_NAME} is available.\n\n"
+                f"Current version: {result.get('current')} ({current_tag})\n"
+                f"Latest release:  {result.get('latest')} ({latest_tag})\n\n"
                 f"Package: {asset}\n\n"
                 "Do you want to download and install the update now?"
             )
@@ -4402,9 +4602,12 @@ class MainWindow(QMainWindow):
                 # update will be shown again the next time the app opens.
                 return
         elif manual:
+            tag = result.get("current_tag") or f"v{result.get('current')}"
             QMessageBox.information(
                 self, "Check for updates",
-                f"You are using the latest version ({result.get('current')}).")
+                f"You are using the latest version ({result.get('current')}).\n\n"
+                f"Current release tag: {tag}\n"
+                f"Repository checked: {result.get('repo', '')}")
 
     def _download_and_install_update(self, result):
         """Start the separate updater, close this app, and reopen after update.

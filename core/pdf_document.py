@@ -684,8 +684,20 @@ class PDFDocument:
     # ---- saving ----
     def save(self, output_path: str | None = None, incremental: bool = False,
              garbage: int = 4, deflate: bool = True):
-        """Save the PDF. If output_path is None, save in place."""
-        target = output_path or self.path
+        """Save the PDF.
+
+        Ctrl+S should update the currently-open file directly. PyMuPDF cannot
+        do a full cleaned save over the same file while it is open, so an
+        in-place save is written to a temporary sibling file, the old document
+        handle is closed, the temp file replaces the original, and the document
+        is reopened from the same path.
+
+        Save As writes to the requested new path and then makes that new path
+        the active document path, matching normal desktop PDF-reader behavior.
+        """
+        target = os.path.abspath(output_path or self.path)
+        current = os.path.abspath(self.path) if self.path else ""
+
         # Stamp the producer so saved files show this app - a clean,
         # professional touch.
         try:
@@ -695,12 +707,54 @@ class PDFDocument:
             self.doc.set_metadata(md)
         except Exception:
             pass
-        if target == self.path and incremental:
-            self.doc.save(target, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+
+        same_file = bool(current) and os.path.normcase(target) == os.path.normcase(current)
+        if same_file:
+            import tempfile
+            folder = os.path.dirname(current) or "."
+            fd, tmp = tempfile.mkstemp(prefix=".masumpdf-save-", suffix=".pdf", dir=folder)
+            os.close(fd)
+            try:
+                if incremental:
+                    # Prefer a compact full save when possible, but keep this
+                    # branch for callers that explicitly need incremental save.
+                    self.doc.save(tmp, garbage=0, deflate=deflate)
+                else:
+                    self.doc.save(tmp, garbage=garbage, deflate=deflate)
+                try:
+                    self.doc.close()
+                except Exception:
+                    pass
+                os.replace(tmp, current)
+                self.doc = fitz.open(current)
+                if self.password:
+                    try:
+                        self.doc.authenticate(self.password)
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except Exception:
+                    pass
+                raise
         else:
             self.doc.save(target, garbage=garbage, deflate=deflate)
-        if not output_path:
-            self._dirty = False
+            self.path = target
+            # Reopen the saved copy so future Ctrl+S saves the Save As file.
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+            self.doc = fitz.open(target)
+            if self.password:
+                try:
+                    self.doc.authenticate(self.password)
+                except Exception:
+                    pass
+
+        self._dirty = False
 
     def close(self):
         try:
